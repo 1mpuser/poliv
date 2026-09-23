@@ -9,8 +9,8 @@ Self-hosted трекер ухода за комнатными растениям
 |---|---|
 | `db` | PostgreSQL 16, данные в volume `pgdata` |
 | `backend` | FastAPI + SQLAlchemy 2 + Alembic (миграции применяются при старте) |
-| `frontend` | React 19 + Vite + TypeScript, собирается в статику и отдаётся nginx |
-| `caddy` | Реверс-прокси с авто-HTTPS: `/api/*` → backend, остальное → frontend |
+| `poliv-web` | React 19 + Vite + TypeScript, собирается в статику и отдаётся nginx; он же проксирует `/api` |
+| `caddy` | Реверс-прокси с HTTPS → `poliv-web` |
 
 ## Запуск
 
@@ -57,6 +57,18 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 
 Код менять не нужно. Чтобы работать по чистому HTTP без сертификата (например, за другим прокси),
 задайте `DOMAIN=:80`.
+
+## Сервер, где 443 уже занят другим приложением
+
+Если на сервере уже работает реверс-прокси (здесь — Caddy трекера), свой Caddy не запускается:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.server.yml up -d --build
+```
+
+`poliv-web` подключается к docker-сети внешнего прокси (`EDGE_NETWORK`, по умолчанию `tracker_default`),
+а в его конфиг добавляется `reverse_proxy poliv-web:80` для нового домена. Для текущего сервера всё это
+делает `bash deploy/deploy-server.sh` (осмотр сервера без изменений — `bash deploy/inspect-server.sh`).
 
 ## Бэкап и восстановление
 

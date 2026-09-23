@@ -1,0 +1,17 @@
+# Режим «за чужим реверс-прокси» (сервер, где 443 уже держит Caddy трекера):
+#   docker compose -f docker-compose.yml -f docker-compose.server.yml up -d --build
+# Свой Caddy не запускается, poliv-web подключается к сети внешнего прокси,
+# а тот проксирует домен на poliv-web:80. Наружу порты не публикуются.
+services:
+  caddy:
+    profiles: ["local-caddy"]
+
+  poliv-web:
+    networks:
+      default:
+      edge:
+
+networks:
+  edge:
+    external: true
+    name: ${EDGE_NETWORK:-tracker_default}

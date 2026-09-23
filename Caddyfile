@@ -4,15 +4,9 @@
 
 	encode zstd gzip
 
-	# API и Swagger (/api/docs) — в FastAPI, префикс /api сохраняется
-	handle /api/* {
-		reverse_proxy backend:8000
-	}
-
-	# Всё остальное — SPA
-	handle {
-		reverse_proxy frontend:80
-	}
+	# SPA и /api: nginx в poliv-web сам проксирует /api на backend —
+	# одна точка входа, как за Caddy трекера на сервере
+	reverse_proxy poliv-web:80
 
 	header {
 		Strict-Transport-Security "max-age=31536000"

@@ -8,7 +8,7 @@ Self-hosted трекер ухода за растениями: FastAPI + Postgre
 ```bash
 docker compose up -d --build              # весь стек; миграции применяются при старте backend
 docker compose ps                         # у всех 4 сервисов должно быть (healthy)
-docker compose logs -f backend
+docker compose logs -f backend              # сервисы: db, backend, poliv-web, caddy
 
 # тесты правил (Python 3.12 через uv; системный python3 — 3.9, на нём код не импортируется)
 cd backend && uv run --python 3.12 --with-requirements requirements-dev.txt pytest -q
@@ -61,6 +61,16 @@ docker compose exec backend alembic revision --autogenerate -m "..."
   Локально сейчас `DOMAIN=polivalochka.cool:1477` (нужна строка в `/etc/hosts` и доверенный `caddy-root.crt`).
 - Volumes: `pgdata` (данные), `caddy_data` (CA и сертификаты). `docker compose down -v` стирает базу и локальный CA —
   после этого корневой сертификат придётся доверить заново.
+
+## Прод
+
+- https://polivalochka.ru — VPS `root@213.108.23.47`, код в `/opt/poliv`, рядом трекер perfotracker.ru и VPN.
+- TCP 443 держит Caddy трекера (`/opt/tracker/caddy/Caddyfile.prod`, блок между `# poliv:begin/end`).
+  Свой Caddy на сервере не запускается: `docker-compose.server.yml` подключает `poliv-web` к сети `tracker_default`.
+- Поэтому имена сервисов уникальны: `poliv-web` (не `frontend`), бэкенд для nginx — алиас `poliv-api`.
+  Сервис с именем `frontend`/`backend` в сети трекера перехватит трафик трекера.
+- Порт 80 на сервере не трогать (acme.sh для VPN), UDP 443 не публиковать (hysteria). Сертификат — TLS-ALPN.
+- Деплой/обновление: `bash deploy/deploy-server.sh` (уезжает HEAD, `.env` на сервере создаётся один раз).
 
 ## Правила
 
