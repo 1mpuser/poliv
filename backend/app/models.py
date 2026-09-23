@@ -11,6 +11,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -32,10 +33,28 @@ def _enum(cls: type[enum.Enum], name: str) -> Enum:
     return Enum(cls, name=name, values_callable=lambda e: [m.value for m in e])
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(String(254), unique=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    blocked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Растёт при смене пароля и блокировке — выданные раньше JWT перестают действовать
+    token_version: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+def _owner() -> Mapped[int]:
+    return mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+
+
 class Plant(Base):
     __tablename__ = "plants"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = _owner()
     name: Mapped[str] = mapped_column(String(100))
     species: Mapped[str] = mapped_column(String(100), default="")
     location: Mapped[str | None] = mapped_column(String(100))
@@ -60,13 +79,16 @@ class FertilizerType(Base):
     __tablename__ = "fertilizer_types"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(100), unique=True)
+    user_id: Mapped[int] = _owner()
+    name: Mapped[str] = mapped_column(String(100))
     npk: Mapped[str] = mapped_column(String(50), default="")
     root_dose_ml_per_l: Mapped[float | None] = mapped_column(Float)
     foliar_dose_ml_per_l: Mapped[float | None] = mapped_column(Float)
     interval_days_active_season: Mapped[int] = mapped_column(Integer)
     # NULL — в спящий сезон этим удобрением не подкармливают
     interval_days_dormant_season: Mapped[int | None] = mapped_column(Integer)
+
+    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_fertilizer_user_name"),)
 
 
 class WateringLog(Base):
@@ -98,7 +120,8 @@ class LampSession(Base):
     __tablename__ = "lamp_sessions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    # NULL — общая лампа, светит на все растения
+    user_id: Mapped[int] = _owner()
+    # NULL — общая лампа, светит на все растения учётки
     plant_id: Mapped[int | None] = mapped_column(
         ForeignKey("plants.id", ondelete="CASCADE"), index=True
     )
@@ -123,14 +146,12 @@ class RepottingLog(Base):
     note: Mapped[str | None] = mapped_column(Text)
 
 
-class AppSettings(Base):
-    """Глобальные настройки — одна строка с id=1."""
+class UserSettings(Base):
+    """Настройки учётки: сезон и порог «скоро»."""
 
-    __tablename__ = "app_settings"
+    __tablename__ = "user_settings"
 
-    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     current_season: Mapped[Season] = mapped_column(_enum(Season, "season"), default=Season.active)
     # За сколько дней до срока статус становится «скоро»
     notify_days_ahead: Mapped[int] = mapped_column(Integer, default=1)
-
-    __table_args__ = (CheckConstraint("id = 1", name="single_row"),)

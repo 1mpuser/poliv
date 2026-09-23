@@ -16,14 +16,35 @@ Self-hosted трекер ухода за комнатными растениям
 
 ```bash
 cp .env.example .env
-# Задайте POSTGRES_PASSWORD, APP_USERNAME/APP_PASSWORD и JWT_SECRET:
-#   openssl rand -hex 32
+# Задайте POSTGRES_PASSWORD и JWT_SECRET:  openssl rand -hex 32
 docker compose up -d --build
 docker compose ps          # у всех четырёх сервисов должен быть статус (healthy)
+
+# первый админ: пароль сгенерируется и напечатается один раз
+docker compose exec backend python -m app.cli set-owner --email you@example.com
 ```
 
-- Приложение: https://localhost (вход — `APP_USERNAME` / `APP_PASSWORD` из `.env`)
-- Swagger: https://localhost/api/docs (кнопка **Authorize** принимает те же логин и пароль)
+- Приложение: https://localhost — вход по почте и паролю
+- Swagger: https://localhost/api/docs (кнопка **Authorize** принимает почту и пароль)
+
+## Учётки
+
+Самостоятельной регистрации нет — учётки выдаёт админ во вкладке **«Админка»**: почта (это логин) +
+пароль, который генерируется в форме и показывается один раз с кнопкой «Скопировать». Там же —
+новый пароль, блокировка и удаление учётки со всеми данными. У каждой учётки свои растения,
+удобрения и настройки; новая начинается пустой, с двумя стартовыми удобрениями.
+
+Смена пароля или блокировка сразу разлогинивает учётку на всех устройствах. Свой пароль меняется
+в «Настройках» → «Аккаунт».
+
+Команды на сервере (пароль генерируется, если не задан `--password`):
+
+```bash
+docker compose exec backend python -m app.cli set-owner --email you@example.com   # владелец-админ
+docker compose exec backend python -m app.cli create-user --email friend@example.com [--admin]
+docker compose exec backend python -m app.cli reset-password --email you@example.com  # если забыли
+docker compose exec backend python -m app.cli make-admin --email friend@example.com
+```
 
 Сертификат выпускает локальный CA Caddy (`TLS=internal`), поэтому браузер покажет предупреждение,
 пока корневой сертификат не добавлен в доверенные (см. ниже).
@@ -121,24 +142,30 @@ docker compose start db
 │   ├── alembic/versions/    миграции (0001 — схема + стартовые данные)
 │   ├── app/
 │   │   ├── main.py          FastAPI, /api, Swagger
-│   │   ├── auth.py          JWT, вход по логину/паролю из .env
+│   │   ├── auth.py          JWT, вход по почте, текущая учётка
+│   │   ├── cli.py           set-owner, create-user, reset-password, make-admin
 │   │   ├── models.py        SQLAlchemy-модели
 │   │   ├── schemas.py       Pydantic-схемы
-│   │   ├── routers/         plants, fertilizers, logs (полив/подкормка/пересадка), lamp, settings
+│   │   ├── routers/         plants, fertilizers, logs, lamp, settings, admin
 │   │   └── services/        summary.py — правила, plants.py — сборка из БД
 │   └── tests/
 └── frontend/
     └── src/
         ├── api.ts, types.ts, format.ts
         ├── components/      карточка, плитки, действия, график, история, формы
-        └── pages/           Dashboard, PlantPage, SettingsPage, NewPlant, Login
+        └── pages/           Dashboard, PlantPage, SettingsPage, NewPlant, AdminPage, Login
 ```
 
 ## Разработка
 
 ```bash
-# тесты правил
+# юнит-тесты (правила, пароли)
 cd backend && uv run --python 3.12 --with-requirements requirements-dev.txt pytest
+
+# все тесты, включая API на реальном Postgres (база poliv_test пересоздаётся)
+docker compose exec db sh -c 'createdb -U "$POSTGRES_USER" poliv_test' 2>/dev/null
+docker compose run --rm --no-deps -u root -v "$PWD/backend:/app" backend sh -c \
+  'export TEST_DATABASE_URL="${DATABASE_URL%/*}/poliv_test"; pip install -q pytest httpx && python -m pytest -q'
 
 # фронтенд с hot reload поверх запущенного стека (прокси /api → https://localhost)
 cd frontend && npm install && npm run dev

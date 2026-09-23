@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { api } from '../api';
 
 export function Login({ onLogin }: { onLogin: () => void }) {
-  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -16,7 +16,7 @@ export function Login({ onLogin }: { onLogin: () => void }) {
           setBusy(true);
           setError(null);
           try {
-            await api.login(username, password);
+            await api.login(email.trim(), password);
             onLogin();
           } catch (err) {
             setError(err instanceof Error ? err.message : 'Не удалось войти');
@@ -29,12 +29,14 @@ export function Login({ onLogin }: { onLogin: () => void }) {
         <h1>Мои растения</h1>
         <input
           className="input"
-          name="username"
+          name="email"
+          type="email"
+          inputMode="email"
           autoComplete="username"
-          placeholder="Логин"
-          aria-label="Логин"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
+          placeholder="Почта"
+          aria-label="Почта"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
           required
         />
         <input

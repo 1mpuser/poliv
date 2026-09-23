@@ -44,8 +44,6 @@ TZ=Europe/Moscow
 POSTGRES_DB=poliv
 POSTGRES_USER=poliv
 POSTGRES_PASSWORD=$(openssl rand -hex 24)
-APP_USERNAME=admin
-APP_PASSWORD=$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-16)
 JWT_SECRET=$(openssl rand -hex 32)
 JWT_EXPIRE_DAYS=30
 EDGE_NETWORK=$EDGE_NETWORK
@@ -124,5 +122,6 @@ if [ -n "$TRACKER_DOMAIN" ]; then
   code=$(curl -s -o /dev/null -w '%{http_code}' --resolve "$TRACKER_DOMAIN:443:127.0.0.1" "https://$TRACKER_DOMAIN/" || true)
   echo "==> Трекер $TRACKER_DOMAIN после reload: HTTP $code"
 fi
-echo "==> Готово. Пароль входа: ssh $(whoami)@<сервер> grep APP_PASSWORD $REMOTE_DIR/.env"
+echo "==> Готово. Первый вход (один раз): назначить владельца-админа, пароль напечатается:"
+echo "    ssh $(whoami)@<сервер> 'cd $REMOTE_DIR && docker compose exec backend python -m app.cli set-owner --email <почта>'"
 REMOTE

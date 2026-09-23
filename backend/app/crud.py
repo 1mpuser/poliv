@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db import Base
+from app.models import FertilizerType, LampSession, Plant, User
 
 M = TypeVar("M", bound=Base)
 
@@ -32,3 +33,33 @@ def save(db: Session, obj: M) -> M:
 def delete(db: Session, obj: Base) -> None:
     db.delete(obj)
     db.commit()
+
+
+# ---------- Владение: чужая запись неотличима от несуществующей (404) ----------
+def owned_plant(db: Session, user: User, plant_id: int) -> Plant:
+    plant = db.get(Plant, plant_id)
+    if plant is None or plant.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Растение не найдено")
+    return plant
+
+
+def owned_fertilizer(db: Session, user: User, fertilizer_id: int) -> FertilizerType:
+    obj = db.get(FertilizerType, fertilizer_id)
+    if obj is None or obj.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Удобрение не найдено")
+    return obj
+
+
+def owned_log(db: Session, user: User, model: type[M], log_id: int) -> M:
+    """Журналы полива/подкормки/пересадки принадлежат учётке через растение."""
+    obj = db.get(model, log_id)
+    if obj is None or db.get(Plant, obj.plant_id).user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Запись не найдена")
+    return obj
+
+
+def owned_lamp(db: Session, user: User, session_id: int) -> LampSession:
+    obj = db.get(LampSession, session_id)
+    if obj is None or obj.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Сессия лампы не найдена")
+    return obj

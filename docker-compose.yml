@@ -22,8 +22,6 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      APP_USERNAME: ${APP_USERNAME}
-      APP_PASSWORD: ${APP_PASSWORD}
       JWT_SECRET: ${JWT_SECRET}
       JWT_EXPIRE_DAYS: ${JWT_EXPIRE_DAYS:-30}
       TZ: ${TZ:-Europe/Moscow}

@@ -10,8 +10,14 @@ docker compose up -d --build              # весь стек; миграции 
 docker compose ps                         # у всех 4 сервисов должно быть (healthy)
 docker compose logs -f backend              # сервисы: db, backend, poliv-web, caddy
 
-# тесты правил (Python 3.12 через uv; системный python3 — 3.9, на нём код не импортируется)
+# юнит-тесты (Python 3.12 через uv; системный python3 — 3.9, на нём код не импортируется)
 cd backend && uv run --python 3.12 --with-requirements requirements-dev.txt pytest -q
+
+# все тесты, включая tests/test_api.py на реальном Postgres (база poliv_test пересоздаётся;
+# без TEST_DATABASE_URL API-тесты пропускаются)
+docker compose exec db sh -c 'createdb -U "$POSTGRES_USER" poliv_test' 2>/dev/null
+docker compose run --rm --no-deps -u root -v "$PWD/backend:/app" backend sh -c \
+  'export TEST_DATABASE_URL="${DATABASE_URL%/*}/poliv_test"; pip install -q pytest httpx && python -m pytest -q'
 
 # фронтенд: typecheck + сборка (это и есть «линт» — ESLint в проекте нет)
 cd frontend && npm run build
@@ -33,16 +39,23 @@ docker compose exec backend alembic revision --autogenerate -m "..."
   из БД и собирает `PlantSummary`. Фронтенд статусы не вычисляет, только показывает поля сводки
   (`ok | soon | late | off`). Новое правило — сначала тест в `test_summary.py`.
 - Дни — календарные, в `settings.zone` (env `TZ`, Europe/Moscow). В БД всё `timestamptz`.
-- `LampSession.plant_id IS NULL` — общая лампа, её часы засчитываются всем растениям; пересечения
+- `LampSession.plant_id IS NULL` — общая лампа, её часы засчитываются всем растениям учётки; пересечения
   объединяются (`lamp_hours_between`). Одна открытая сессия на растение — частичный unique-индекс
-  `uq_lamp_one_open` в миграции 0001 (в моделях его нет, autogenerate может предложить его удалить — не соглашаться).
-- `AppSettings` — одна строка `id=1` (CHECK). Сезон и порог «скоро» (`notify_days_ahead`) глобальные,
-  остальные настройки ухода — поля `Plant`.
+  `uq_lamp_one_open` (миграции 0001/0002) (в моделях его нет, autogenerate может предложить его удалить — не соглашаться).
+- Сезон и порог «скоро» (`notify_days_ahead`) — в `user_settings`, остальные настройки ухода — поля `Plant`.
 - `FeedingLog.fertilizer_type_id` — `ON DELETE SET NULL`: удаление удобрения не трогает историю.
-- Все роуты под `/api`, всё кроме `/api/health` и `/api/auth/token` закрыто JWT (`auth.require_user`
-  на уровне роутера в `main.py`). Логин — OAuth2 password form, единственный пользователь из `.env`.
+- **Мультиучётки, данные изолированы.** `plants`, `fertilizer_types`, `lamp_sessions` имеют `user_id`,
+  журналы принадлежат учётке через растение, настройки — `user_settings` (PK = `user_id`).
+  Любой доступ по id — через `crud.owned_*`: чужая запись отвечает 404, как несуществующая.
+  Новый эндпоинт без `CurrentUser` и `owned_*` — дыра; на изоляцию есть тесты в `tests/test_api.py`.
+- Вход: OAuth2 password form, `username` = почта. JWT: `sub` = id, `ver` = `users.token_version`;
+  смена пароля и блокировка увеличивают версию — старые токены сразу 401.
+- Учётки выдаёт админ (`/api/admin/*`, для не-админа 404; себя заблокировать/удалить нельзя) или CLI
+  `python -m app.cli` (`set-owner`, `create-user`, `reset-password`, `make-admin`). Пароли — scrypt (`passwords.py`).
+  Миграция 0002 отдала старые данные заглушке `owner@localhost.invalid` (id=1) — её «оживляет» `set-owner`.
 - PATCH-эндпоинты используют `crud.apply_update` (`exclude_unset`): явный `null` — значимое значение
   (например, `ended_at: null` снова зажигает лампу — так работает «Отменить»).
+- Общая лампа (`plant_id IS NULL`) — своя у каждой учётки.
 
 ## Фронтенд
 
@@ -69,6 +82,8 @@ docker compose exec backend alembic revision --autogenerate -m "..."
   Свой Caddy на сервере не запускается: `docker-compose.server.yml` подключает `poliv-web` к сети `tracker_default`.
 - Поэтому имена сервисов уникальны: `poliv-web` (не `frontend`), бэкенд для nginx — алиас `poliv-api`.
   Сервис с именем `frontend`/`backend` в сети трекера перехватит трафик трекера.
+- Пароли учёток генерируются на сервере и печатаются один раз — Claude их не видит
+  (классификатор блокирует чтение секретов); CLI-команды с выводом пароля отдавать пользователю через `!`.
 - Порт 80 на сервере не трогать (acme.sh для VPN), UDP 443 не публиковать (hysteria). Сертификат — TLS-ALPN.
 - Бэкап БД: root-cron 03:25 → `/var/backups/poliv/db`, 14 дней (`deploy/backup.sh`).
 - Деплой/обновление: `bash deploy/deploy-server.sh` (уезжает HEAD, `.env` на сервере создаётся один раз).

@@ -6,6 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import crud, schemas
+from app.auth import CurrentUser
 from app.db import get_db
 from app.models import FertilizerType
 
@@ -22,28 +23,30 @@ def _save(db: Session, obj: FertilizerType) -> FertilizerType:
 
 
 @router.get("", response_model=list[schemas.FertilizerOut])
-def list_fertilizers(db: DB):
-    return db.scalars(select(FertilizerType).order_by(FertilizerType.id)).all()
+def list_fertilizers(user: CurrentUser, db: DB):
+    return db.scalars(
+        select(FertilizerType).where(FertilizerType.user_id == user.id).order_by(FertilizerType.id)
+    ).all()
 
 
 @router.post("", response_model=schemas.FertilizerOut, status_code=status.HTTP_201_CREATED)
-def create_fertilizer(body: schemas.FertilizerCreate, db: DB):
-    return _save(db, FertilizerType(**body.model_dump()))
+def create_fertilizer(body: schemas.FertilizerCreate, user: CurrentUser, db: DB):
+    return _save(db, FertilizerType(user_id=user.id, **body.model_dump()))
 
 
 @router.get("/{fertilizer_id}", response_model=schemas.FertilizerOut)
-def get_fertilizer(fertilizer_id: int, db: DB):
-    return crud.get_or_404(db, FertilizerType, fertilizer_id, "Удобрение не найдено")
+def get_fertilizer(fertilizer_id: int, user: CurrentUser, db: DB):
+    return crud.owned_fertilizer(db, user, fertilizer_id)
 
 
 @router.patch("/{fertilizer_id}", response_model=schemas.FertilizerOut)
-def update_fertilizer(fertilizer_id: int, body: schemas.FertilizerUpdate, db: DB):
-    obj = crud.get_or_404(db, FertilizerType, fertilizer_id, "Удобрение не найдено")
+def update_fertilizer(fertilizer_id: int, body: schemas.FertilizerUpdate, user: CurrentUser, db: DB):
+    obj = crud.owned_fertilizer(db, user, fertilizer_id)
     crud.apply_update(obj, body)
     return _save(db, obj)
 
 
 @router.delete("/{fertilizer_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_fertilizer(fertilizer_id: int, db: DB):
+def delete_fertilizer(fertilizer_id: int, user: CurrentUser, db: DB):
     # История подкормок сохраняется: fertilizer_type_id станет NULL
-    crud.delete(db, crud.get_or_404(db, FertilizerType, fertilizer_id, "Удобрение не найдено"))
+    crud.delete(db, crud.owned_fertilizer(db, user, fertilizer_id))

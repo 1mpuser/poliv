@@ -9,12 +9,13 @@ from sqlalchemy.orm import Session
 from app import schemas
 from app.config import settings
 from app.models import (
-    AppSettings,
     FeedingLog,
     FertilizerType,
     LampSession,
     Plant,
     RepottingLog,
+    User,
+    UserSettings,
     WateringLog,
 )
 from app.services import summary as rules
@@ -24,39 +25,45 @@ def now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def get_app_settings(db: Session) -> AppSettings:
-    row = db.get(AppSettings, 1)
-    if row is None:  # на случай ручной очистки таблицы
-        row = AppSettings(id=1)
+def get_user_settings(db: Session, user_id: int) -> UserSettings:
+    row = db.get(UserSettings, user_id)
+    if row is None:  # учётка создана в обход create_user
+        row = UserSettings(user_id=user_id)
         db.add(row)
         db.commit()
     return row
 
 
-def _lamp_filter(plant_id: int):
-    """Сессии, которые светят на растение: его собственные и общая лампа."""
-    return or_(LampSession.plant_id == plant_id, LampSession.plant_id.is_(None))
+def _lamp_filter(plant: Plant):
+    """Сессии, которые светят на растение: его собственные и общая лампа той же учётки."""
+    return or_(
+        LampSession.plant_id == plant.id,
+        (LampSession.plant_id.is_(None)) & (LampSession.user_id == plant.user_id),
+    )
 
 
-def _lamp_sessions(db: Session, plant_id: int, since: datetime) -> list[rules.Session]:
+def _lamp_sessions(db: Session, plant: Plant, since: datetime) -> list[rules.Session]:
     rows = db.execute(
         select(LampSession.started_at, LampSession.ended_at).where(
-            _lamp_filter(plant_id),
+            _lamp_filter(plant),
             or_(LampSession.ended_at.is_(None), LampSession.ended_at >= since),
         )
     ).all()
     return [(s, e) for s, e in rows]
 
 
-def _open_session_id(db: Session, plant_id: int | None) -> int | None:
+def open_session(db: Session, user_id: int, plant_id: int | None) -> LampSession | None:
+    """Горящая сессия растения или общей лампы (plant_id=None) учётки."""
     cond = LampSession.plant_id.is_(None) if plant_id is None else LampSession.plant_id == plant_id
-    return db.scalar(select(LampSession.id).where(cond, LampSession.ended_at.is_(None)))
+    return db.scalars(
+        select(LampSession).where(LampSession.user_id == user_id, cond, LampSession.ended_at.is_(None))
+    ).first()
 
 
 def build_summary(
     db: Session,
     plant: Plant,
-    app: AppSettings,
+    app: UserSettings,
     fertilizers: Sequence[FertilizerType],
     now: datetime,
 ) -> schemas.PlantSummary:
@@ -81,8 +88,8 @@ def build_summary(
     )
 
     midnight = rules.local_midnight(rules.local_date(now, tz), tz)
-    hours = rules.lamp_hours_today(_lamp_sessions(db, plant.id, midnight), now, tz)
-    open_id = _open_session_id(db, plant.id)
+    hours = rules.lamp_hours_today(_lamp_sessions(db, plant, midnight), now, tz)
+    own = open_session(db, plant.user_id, plant.id)
 
     last_repot = db.scalar(
         select(func.max(RepottingLog.repotted_at)).where(RepottingLog.plant_id == plant.id)
@@ -114,9 +121,9 @@ def build_summary(
             hours_today=round(hours, 2),
             planned_hours=plant.lamp_hours_per_day,
             status=rules.lamp_status(hours, plant.lamp_hours_per_day),
-            is_on=open_id is not None,
-            open_session_id=open_id,
-            shared_is_on=_open_session_id(db, None) is not None,
+            is_on=own is not None,
+            open_session_id=own.id if own else None,
+            shared_is_on=open_session(db, plant.user_id, None) is not None,
         ),
         repot=schemas.RepotSummary(
             last_at=last_repot,
@@ -128,16 +135,16 @@ def build_summary(
     )
 
 
-def build_summaries(db: Session, plants: Sequence[Plant]) -> list[schemas.PlantSummary]:
-    app = get_app_settings(db)
-    fertilizers = db.scalars(select(FertilizerType)).all()
+def build_summaries(db: Session, user: User, plants: Sequence[Plant]) -> list[schemas.PlantSummary]:
+    app = get_user_settings(db, user.id)
+    fertilizers = db.scalars(select(FertilizerType).where(FertilizerType.user_id == user.id)).all()
     now = now_utc()
     return [build_summary(db, p, app, fertilizers, now) for p in plants]
 
 
 def history(
     db: Session,
-    plant_id: int,
+    plant: Plant,
     types: set[str],
     date_from: date | None,
     date_to: date | None,
@@ -146,6 +153,7 @@ def history(
     start = rules.local_midnight(date_from, tz) if date_from else None
     end = rules.local_midnight(date_to + timedelta(days=1), tz) if date_to else None
     now = now_utc()
+    plant_id = plant.id
 
     def in_range(col):
         conds = []
@@ -177,7 +185,7 @@ def history(
             )
     if "lamp" in types:
         for s in db.scalars(
-            select(LampSession).where(_lamp_filter(plant_id), *in_range(LampSession.started_at))
+            select(LampSession).where(_lamp_filter(plant), *in_range(LampSession.started_at))
         ):
             hours = ((s.ended_at or now) - s.started_at).total_seconds() / 3600
             events.append(
@@ -208,7 +216,8 @@ def history(
     return events
 
 
-def weekly(db: Session, plant_id: int, weeks: int) -> list[schemas.WeekStatOut]:
+def weekly(db: Session, plant: Plant, weeks: int) -> list[schemas.WeekStatOut]:
+    plant_id = plant.id
     tz = settings.zone
     now = now_utc()
     today = rules.local_date(now, tz)
@@ -219,7 +228,7 @@ def weekly(db: Session, plant_id: int, weeks: int) -> list[schemas.WeekStatOut]:
     feedings = db.scalars(
         select(FeedingLog.fed_at).where(FeedingLog.plant_id == plant_id, FeedingLog.fed_at >= since)
     ).all()
-    stats = rules.weekly_stats(waterings, feedings, _lamp_sessions(db, plant_id, since), weeks, now, tz)
+    stats = rules.weekly_stats(waterings, feedings, _lamp_sessions(db, plant, since), weeks, now, tz)
     return [
         schemas.WeekStatOut(
             week_start=w.week_start,

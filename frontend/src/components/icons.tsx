@@ -12,13 +12,14 @@ export function IconSprite() {
       <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></symbol>
       <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14" /></symbol>
       <symbol id="i-plants" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="2" /><rect x="13" y="4" width="7" height="7" rx="2" /><rect x="4" y="13" width="7" height="7" rx="2" /><rect x="13" y="13" width="7" height="7" rx="2" /></symbol>
+      <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5" /><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6" /><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14.3c2.2.7 3.5 2.8 3.5 5.7" /></symbol>
       <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h9M19 7h1M4 17h3M11 17h9" /><circle cx="16" cy="7" r="2.5" /><circle cx="9" cy="17" r="2.5" /></symbol>
     </svg>
   );
 }
 
 export type IconName =
-  | 'water' | 'feed' | 'lamp' | 'repot' | 'leaf' | 'chev' | 'back' | 'plus' | 'minus' | 'plants' | 'settings';
+  | 'water' | 'feed' | 'lamp' | 'repot' | 'leaf' | 'chev' | 'back' | 'plus' | 'minus' | 'plants' | 'settings' | 'users';
 
 export function Icon({ name, className = 'i' }: { name: IconName; className?: string }) {
   return (

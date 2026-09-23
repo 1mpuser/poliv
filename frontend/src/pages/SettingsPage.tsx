@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { api } from '../api';
 import { Field, Segmented, Stepper } from '../components/controls';
+import { AccountSection } from '../components/AccountSection';
 import { FertilizerList } from '../components/FertilizerList';
 import { PlantForm } from '../components/PlantForm';
 import { useToast } from '../components/toast';
@@ -190,9 +191,8 @@ export function SettingsPage({ onLogout }: { onLogout: () => void }) {
               ]}
             />
 
-            <div className="btn-row" style={{ marginTop: 28 }}>
-              <button className="btn btn--sm" type="button" onClick={onLogout}>Выйти</button>
-            </div>
+            <h2 className="section__title" style={{ marginTop: 28 }}>Аккаунт</h2>
+            <AccountSection onLogout={onLogout} />
           </section>
         </div>
 

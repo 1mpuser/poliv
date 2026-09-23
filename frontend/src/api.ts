@@ -1,4 +1,5 @@
 import type {
+  AdminUser,
   AppSettings,
   EventType,
   FeedMethod,
@@ -6,6 +7,7 @@ import type {
   FertilizerFields,
   HistoryEvent,
   LampSession,
+  Me,
   Plant,
   PlantFields,
   PlantSummary,
@@ -71,18 +73,35 @@ const patch = <T>(path: string, body: unknown) => request<T>('PATCH', path, body
 const del = (path: string) => request<void>('DELETE', path);
 
 export const api = {
-  async login(username: string, password: string) {
+  async login(email: string, password: string) {
     const res = await fetch('/api/auth/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ username, password }),
+      body: new URLSearchParams({ username: email, password }),
     });
     if (!res.ok) {
-      throw new ApiError(res.status, res.status === 401 ? 'Неверный логин или пароль' : 'Сервер недоступен');
+      throw new ApiError(res.status, res.status === 401 ? 'Неверная почта или пароль' : 'Сервер недоступен');
     }
     const { access_token } = await res.json();
     tokenStore.set(access_token);
   },
+  me: () => get<Me>('/auth/me'),
+  /** Остальные устройства разлогиниваются, это получает новый токен */
+  async changePassword(current: string, next: string) {
+    const { access_token } = await post<{ access_token: string }>('/auth/password', {
+      current_password: current,
+      new_password: next,
+    });
+    tokenStore.set(access_token);
+  },
+
+  // Админка
+  adminUsers: () => get<AdminUser[]>('/admin/users'),
+  adminCreateUser: (email: string, password: string) => post<AdminUser>('/admin/users', { email, password }),
+  adminSetPassword: (id: number, password: string) => post<void>(`/admin/users/${id}/password`, { password }),
+  adminBlock: (id: number) => post<void>(`/admin/users/${id}/block`),
+  adminUnblock: (id: number) => post<void>(`/admin/users/${id}/unblock`),
+  adminDelete: (id: number) => del(`/admin/users/${id}`),
 
   // Растения
   summaries: () => get<PlantSummary[]>('/plants/summary'),

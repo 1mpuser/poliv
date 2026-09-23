@@ -105,3 +105,17 @@ export interface WeekStat {
   lamp_hours: number;
   is_current: boolean;
 }
+
+export interface Me {
+  id: number;
+  email: string;
+  is_admin: boolean;
+}
+
+export interface AdminUser {
+  id: number;
+  email: string;
+  is_admin: boolean;
+  blocked_at: string | null;
+  created_at: string;
+}
