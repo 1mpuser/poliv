@@ -6,7 +6,7 @@
 |---|---|
 | Адрес | https://polivalochka.ru (`www` → редирект 301) |
 | Сервер | `root@213.108.23.47`, Ubuntu 26.04, 1 vCPU / 1,9 ГБ + swap 2 ГБ, Docker 29 |
-| Код | `/opt/poliv` — распакованный `git archive HEAD`, **не** git-клон |
+| Код | `/opt/poliv` — распакованный `git archive HEAD`, **не** git-клон; задеплоенный коммит — `/opt/poliv/REVISION` |
 | Конфиг | `/opt/poliv/.env` (chmod 600): `DOMAIN`, `TZ`, `POSTGRES_*`, `JWT_*`, `EDGE_NETWORK`. Секреты созданы на сервере |
 | Запуск | `docker compose -f docker-compose.yml -f docker-compose.server.yml …` (без своего Caddy) |
 | Контейнеры | `poliv-db-1`, `poliv-backend-1`, `poliv-poliv-web-1` |
@@ -42,7 +42,11 @@ bash deploy/deploy-server.sh  # только деплой текущего HEAD
 5. проверяет, что Caddy трекера достаёт `poliv-web` по сети;
 6. дописывает блок в Caddyfile трекера, **только если его нет**; перед этим бэкап в
    `/var/backups/poliv/`, после — `caddy validate`, при ошибке файл восстанавливается;
-7. `caddy reload` (без перезапуска контейнера) и проверка, что трекер отвечает.
+7. `caddy reload` (без перезапуска контейнера) и проверка, что трекер отвечает;
+8. пишет коммит в `/opt/poliv/REVISION` — `release.sh` сверяет его с HEAD.
+
+В удалённой части скрипта (она идёт в `bash -s` через stdin) любые `docker compose exec` — только с `</dev/null`,
+иначе команда прочитает остаток скрипта как свой ввод и деплой тихо оборвётся.
 
 Сборка на сервере занимает 1–2 минуты (1 vCPU). Даунтайм — несколько секунд при пересоздании контейнеров.
 
