@@ -1,7 +1,9 @@
 # Поливалка — заметки для Claude
 
 Self-hosted трекер ухода за растениями: FastAPI + Postgres + React SPA за Caddy, всё в Docker Compose.
-Пользовательская документация — в `README.md`, здесь только то, что нужно при работе с кодом.
+Документация — `docs/` (начинать с `docs/workflow.md`; решения и их причины — `docs/decisions.md`).
+Здесь — только то, что нужно при работе с кодом. Меняешь поведение или инфраструктуру — обнови `docs/`
+и допиши строку в `docs/history.md`.
 
 ## Команды
 
@@ -86,7 +88,7 @@ docker compose exec backend alembic revision --autogenerate -m "..."
   (классификатор блокирует чтение секретов); CLI-команды с выводом пароля отдавать пользователю через `!`.
 - Порт 80 на сервере не трогать (acme.sh для VPN), UDP 443 не публиковать (hysteria). Сертификат — TLS-ALPN.
 - Бэкап БД: root-cron 03:25 → `/var/backups/poliv/db`, 14 дней (`deploy/backup.sh`).
-- Деплой/обновление: `bash deploy/deploy-server.sh` (уезжает HEAD, `.env` на сервере создаётся один раз).
+- Выпуск: `bash deploy/release.sh` (тесты → push → деплой → проверка прода); только деплой — `bash deploy/deploy-server.sh` (уезжает HEAD, `.env` на сервере создаётся один раз).
 
 ## Правила
 
