@@ -31,7 +31,7 @@ ssh "$HOST" "mkdir -p '$REMOTE_DIR'"
 git archive --format=tar HEAD | ssh "$HOST" "tar -x -C '$REMOTE_DIR'"
 
 ssh "$HOST" \
-  "DOMAIN='$DOMAIN' REMOTE_DIR='$REMOTE_DIR' EDGE_NETWORK='$EDGE_NETWORK' EDGE_CADDY='$EDGE_CADDY' EDGE_CADDYFILE='$EDGE_CADDYFILE' bash -s" <<'REMOTE'
+  "DEPLOY_REV='$(git rev-parse --short HEAD)' DOMAIN='$DOMAIN' REMOTE_DIR='$REMOTE_DIR' EDGE_NETWORK='$EDGE_NETWORK' EDGE_CADDY='$EDGE_CADDY' EDGE_CADDYFILE='$EDGE_CADDYFILE' bash -s" <<'REMOTE'
 set -euo pipefail
 cd "$REMOTE_DIR"
 
@@ -56,7 +56,8 @@ COMPOSE="docker compose -f docker-compose.yml -f docker-compose.server.yml"
 if [ "$($COMPOSE ps --format '{{.Service}} {{.Health}}' 2>/dev/null | grep -c '^db healthy')" = 1 ]; then
   mkdir -p /var/backups/poliv/db
   DUMP=/var/backups/poliv/db/predeploy-$(date +%Y%m%d-%H%M%S).dump
-  $COMPOSE exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "$DUMP"
+  # </dev/null: весь этот скрипт идёт в bash через stdin — exec иначе «съест» его остаток
+  $COMPOSE exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' < /dev/null > "$DUMP"
   echo "==> Бэкап перед выкаткой: $DUMP"
   ls -1t /var/backups/poliv/db/predeploy-*.dump | tail -n +11 | xargs -r rm --
 fi
@@ -132,6 +133,8 @@ if [ -n "$TRACKER_DOMAIN" ]; then
   code=$(curl -s -o /dev/null -w '%{http_code}' --resolve "$TRACKER_DOMAIN:443:127.0.0.1" "https://$TRACKER_DOMAIN/" || true)
   echo "==> Трекер $TRACKER_DOMAIN после reload: HTTP $code"
 fi
-echo "==> Готово. Первый вход (один раз): назначить владельца-админа, пароль напечатается:"
+# Маркер версии: release.sh сверяет его с HEAD — иначе «успешный» деплой старого кода не заметить
+echo "$DEPLOY_REV" > "$REMOTE_DIR/REVISION"
+echo "==> Готово ($DEPLOY_REV). Первый вход (один раз): назначить владельца-админа, пароль напечатается:"
 echo "    ssh $(whoami)@<сервер> 'cd $REMOTE_DIR && docker compose exec backend python -m app.cli set-owner --email <почта>'"
 REMOTE

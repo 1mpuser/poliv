@@ -48,6 +48,13 @@ step "Деплой $(git rev-parse --short HEAD) → $HOST"
 bash deploy/deploy-server.sh
 
 step "Проверка прода"
+rev=$(git rev-parse --short HEAD)
+deployed=$(ssh "$HOST" "cat /opt/poliv/REVISION 2>/dev/null" || true)
+if [ "$deployed" != "$rev" ]; then
+  echo "На сервере версия '${deployed:-нет}', ожидалась $rev — деплой не дошёл до конца" >&2
+  exit 1
+fi
+echo "версия $rev"
 # --resolve: на маке DNS может перехватывать VPN (sing-box TUN)
 ip="${HOST#*@}"
 for i in 1 2 3 4 5; do
