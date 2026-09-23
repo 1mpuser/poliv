@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#F1F2EC" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#141712" media="(prefers-color-scheme: dark)">
+  <title>Лимон «Павловский»</title>
+  <script>try{var t=localStorage.getItem('theme');if(t&&t!=='system')document.documentElement.dataset.theme=t}catch(e){}</script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=Unbounded:wght@500;600&display=swap">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-water" viewBox="0 0 24 24"><path d="M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11z"/></symbol>
+  <symbol id="i-feed" viewBox="0 0 24 24"><path d="M12 21v-9"/><path d="M12 12c0-4 3-6.5 7-6.5 0 4-3 6.5-7 6.5z"/><path d="M12 14.5c0-3-2.5-5-6-5 0 3 2.5 5 6 5z"/></symbol>
+  <symbol id="i-lamp" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-repot" viewBox="0 0 24 24"><path d="M5 11h14l-2 9H7z"/><path d="M12 11V6"/><path d="M12 7.5c-2 0-3.5-1.2-3.5-3.5 2 0 3.5 1.2 3.5 3.5zM12 6.5c0-2.2 1.3-3.5 3.5-3.5 0 2.2-1.3 3.5-3.5 3.5z"/></symbol>
+  <symbol id="i-leaf" viewBox="0 0 24 24"><path d="M4 20C4 10 10 4 20 4c0 10-6 16-16 16z"/><path d="M4 20 14 10"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></symbol>
+  <symbol id="i-plants" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><rect x="13" y="13" width="7" height="7" rx="2"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h9M19 7h1M4 17h3M11 17h9"/><circle cx="16" cy="7" r="2.5"/><circle cx="9" cy="17" r="2.5"/></symbol>
+</svg>
+
+<main class="wrap">
+  <header class="page-head">
+    <a class="icon-btn" href="index.html" aria-label="Назад к растениям"><svg class="i" aria-hidden="true"><use href="#i-back"/></svg></a>
+    <div class="page-head__grow"></div>
+    <a class="icon-btn" href="settings.html?plant=1" aria-label="Настройки растения"><svg class="i" aria-hidden="true"><use href="#i-settings"/></svg></a>
+  </header>
+
+  <!-- data-plant-id — тот же контракт, что у карточки на дашборде -->
+  <div data-plant-id="1">
+    <div class="hero">
+      <span class="thumb thumb--lemon thumb--lg" aria-hidden="true"><svg><use href="#i-leaf"/></svg></span>
+      <div>
+        <h1 class="hero__name">Лимон «Павловский»</h1>
+        <p class="hero__meta">Кухня, восточное окно. Пересажен 3 недели назад.</p>
+      </div>
+    </div>
+
+    <div class="stats stats--lg">
+      <div class="stat" data-stat="water" data-status="ok">
+        <svg class="i stat__icon" aria-hidden="true"><use href="#i-water"/></svg>
+        <span class="stat__value"><span data-value>2</span><small>д</small></span>
+        <span class="stat__label">с полива, норма 4</span>
+        <span class="stat__flag" data-flag></span>
+      </div>
+      <div class="stat" data-stat="feed" data-status="soon">
+        <svg class="i stat__icon" aria-hidden="true"><use href="#i-feed"/></svg>
+        <span class="stat__value"><span data-value>12</span><small>д</small></span>
+        <span class="stat__label">с подкормки, норма 14</span>
+        <span class="stat__flag" data-flag>скоро</span>
+      </div>
+      <div class="stat" data-stat="lamp" data-status="ok">
+        <svg class="i stat__icon" aria-hidden="true"><use href="#i-lamp"/></svg>
+        <span class="stat__value"><span data-value>9</span><small>ч</small></span>
+        <span class="stat__label">досветка из 12</span>
+        <span class="stat__flag" data-flag></span>
+      </div>
+    </div>
+
+    <div class="actions" style="margin-top:12px">
+      <button class="action" type="button" data-action="water" data-primary>
+        <svg class="i" aria-hidden="true"><use href="#i-water"/></svg>Полить
+      </button>
+      <button class="action" type="button" data-action="feed">
+        <svg class="i" aria-hidden="true"><use href="#i-feed"/></svg>Подкормить
+      </button>
+      <button class="action" type="button" data-action="lamp" aria-pressed="false">
+        <svg class="i" aria-hidden="true"><use href="#i-lamp"/></svg><span data-lamp-label>Лампа</span>
+      </button>
+    </div>
+  </div>
+
+  <div class="detail-layout">
+    <section class="section">
+      <h2 class="section__title">Активность за 8 недель</h2>
+      <div class="panel chart">
+        <div class="chart__summary">
+          <div><b>18</b><span class="muted">поливов</span></div>
+          <div><b>4</b><span class="muted">подкормки</span></div>
+          <div><b>8,5 ч</b><span class="muted">свет в день</span></div>
+        </div>
+
+        <!-- --max: максимум событий в неделю (шкала). Каждый .bar — неделя, --n — количество.
+             Последний столбик .is-current — текущая, неполная неделя. -->
+        <div class="chart__bars" style="--max:4" role="img"
+             aria-label="Поливы и подкормки по неделям: от 2 до 3 поливов и до 1 подкормки в неделю">
+          <div class="bar" title="4–10 авг: полив 2, подкормка 1"><i class="bar__seg bar__seg--water" style="--n:2"></i><i class="bar__seg bar__seg--feed" style="--n:1"></i></div>
+          <div class="bar" title="11–17 авг: полив 2"><i class="bar__seg bar__seg--water" style="--n:2"></i><i class="bar__seg bar__seg--feed" style="--n:0"></i></div>
+          <div class="bar" title="18–24 авг: полив 3, подкормка 1"><i class="bar__seg bar__seg--water" style="--n:3"></i><i class="bar__seg bar__seg--feed" style="--n:1"></i></div>
+          <div class="bar" title="25–31 авг: полив 2"><i class="bar__seg bar__seg--water" style="--n:2"></i><i class="bar__seg bar__seg--feed" style="--n:0"></i></div>
+          <div class="bar" title="1–7 сен: полив 2, подкормка 1"><i class="bar__seg bar__seg--water" style="--n:2"></i><i class="bar__seg bar__seg--feed" style="--n:1"></i></div>
+          <div class="bar" title="8–14 сен: полив 3, подкормка 1"><i class="bar__seg bar__seg--water" style="--n:3"></i><i class="bar__seg bar__seg--feed" style="--n:1"></i></div>
+          <div class="bar" title="15–21 сен: полив 2"><i class="bar__seg bar__seg--water" style="--n:2"></i><i class="bar__seg bar__seg--feed" style="--n:0"></i></div>
+          <div class="bar is-current" title="22–28 сен, идёт сейчас: полив 0"><i class="bar__seg bar__seg--water" style="--n:0"></i><i class="bar__seg bar__seg--feed" style="--n:0"></i></div>
+        </div>
+        <div class="chart__axis" aria-hidden="true">
+          <span>4.08</span><span>11.08</span><span>18.08</span><span>25.08</span><span>1.09</span><span>8.09</span><span>15.09</span><span>22.09</span>
+        </div>
+        <div class="legend">
+          <span style="--c:var(--ev-water)">Полив</span>
+          <span style="--c:var(--ev-feed)">Подкормка</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2 class="section__title">История</h2>
+
+      <div class="chips" role="toolbar" aria-label="Фильтр событий">
+        <button class="chip" type="button" data-filter="all" aria-pressed="true">Все</button>
+        <button class="chip" type="button" data-filter="water" aria-pressed="false">Полив</button>
+        <button class="chip" type="button" data-filter="feed" aria-pressed="false">Подкормка</button>
+        <button class="chip" type="button" data-filter="lamp" aria-pressed="false">Лампа</button>
+        <button class="chip" type="button" data-filter="repot" aria-pressed="false">Пересадка</button>
+      </div>
+
+      <!-- Таймлайн: .tl-day — заголовок дня, .tl-item[data-type] — water | feed | lamp | repot.
+           Иконка берётся из спрайта: #i-{type}. -->
+      <div class="panel">
+        <ol class="timeline" data-timeline>
+          <li class="tl-day">Сегодня</li>
+          <li class="tl-item" data-type="lamp">
+            <span class="tl-ico"><svg class="i" aria-hidden="true"><use href="#i-lamp"/></svg></span>
+            <span><span class="tl-title">Лампа включена</span><br><span class="tl-note">По расписанию</span></span>
+            <time class="tl-time" datetime="2026-09-23T07:00">07:00</time>
+          </li>
+
+          <li class="tl-day">Вчера</li>
+          <li class="tl-item" data-type="lamp">
+            <span class="tl-ico"><svg class="i" aria-hidden="true"><use href="#i-lamp"/></svg></span>
+            <span><span class="tl-title">Лампа выключена</span><br><span class="tl-note">Горела 12 ч</span></span>
+            <time class="tl-time" datetime="2026-09-22T20:30">20:30</time>
+          </li>
+
+          <li class="tl-day">21 сентября</li>
+          <li class="tl-item" data-type="water">
+            <span class="tl-ico"><svg class="i" aria-hidden="true"><use href="#i-water"/></svg></span>
+            <span><span class="tl-title">Полив</span><br><span class="tl-note">0,4 л отстоянной воды</span></span>
+            <time class="tl-time" datetime="2026-09-21T08:15">08:15</time>
+          </li>
+
+          <li class="tl-day">17 сентября</li>
+          <li class="tl-item" data-type="water">
+            <span class="tl-ico"><svg class="i" aria-hidden="true"><use href="#i-water"/></svg></span>
+            <span><span class="tl-title">Полив</span><br><span class="tl-note">0,4 л</span></span>
+            <time class="tl-time" datetime="2026-09-17T08:40">08:40</time>
+          </li>
+
+          <li class="tl-day">11 сентября</li>
+          <li class="tl-item" data-type="feed">
+            <span class="tl-ico"><svg class="i" aria-hidden="true"><use href="#i-feed"/></svg></span>
+            <span><span class="tl-title">Подкормка</span><br><span class="tl-note">Удобрение для цитрусовых, 5 мл на 1 л</span></span>
+            <time class="tl-time" datetime="2026-09-11T09:10">09:10</time>
+          </li>
+          <li class="tl-item" data-type="water">
+            <span class="tl-ico"><svg class="i" aria-hidden="true"><use href="#i-water"/></svg></span>
+            <span><span class="tl-title">Полив</span><br><span class="tl-note">0,4 л</span></span>
+            <time class="tl-time" datetime="2026-09-11T09:05">09:05</time>
+          </li>
+
+          <li class="tl-day">2 сентября</li>
+          <li class="tl-item" data-type="repot">
+            <span class="tl-ico"><svg class="i" aria-hidden="true"><use href="#i-repot"/></svg></span>
+            <span><span class="tl-title">Пересадка</span><br><span class="tl-note">Из горшка 3 л в 5 л, грунт для цитрусовых</span></span>
+            <time class="tl-time" datetime="2026-09-02T18:00">18:00</time>
+          </li>
+        </ol>
+      </div>
+    </section>
+  </div>
+</main>
+
+<nav class="tabbar" aria-label="Разделы">
+  <div class="tabbar__inner">
+    <a href="index.html" aria-current="page"><svg class="i" aria-hidden="true"><use href="#i-plants"/></svg>Растения</a>
+    <a href="settings.html"><svg class="i" aria-hidden="true"><use href="#i-settings"/></svg>Настройки</a>
+  </div>
+</nav>
+
+<div class="toast" role="status" aria-live="polite">
+  <span class="toast__text"></span>
+  <button class="toast__undo" type="button">Отменить</button>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

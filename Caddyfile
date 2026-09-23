@@ -1,0 +1,23 @@
+{$DOMAIN} {
+	# internal — сертификат от локального CA Caddy; email — Let's Encrypt для публичного домена
+	tls {$TLS:internal}
+
+	encode zstd gzip
+
+	# API и Swagger (/api/docs) — в FastAPI, префикс /api сохраняется
+	handle /api/* {
+		reverse_proxy backend:8000
+	}
+
+	# Всё остальное — SPA
+	handle {
+		reverse_proxy frontend:80
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		Referrer-Policy same-origin
+		-Server
+	}
+}

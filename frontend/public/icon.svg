@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="116" fill="#4E7A4A"/>
+  <circle cx="256" cy="276" r="196" fill="#5B8A55"/>
+  <!-- лимон -->
+  <g transform="rotate(-32 256 300)">
+    <ellipse cx="256" cy="300" rx="150" ry="112" fill="#F2CB3A"/>
+    <ellipse cx="100" cy="300" rx="24" ry="17" fill="#F2CB3A"/>
+    <ellipse cx="412" cy="300" rx="24" ry="17" fill="#F2CB3A"/>
+    <clipPath id="lemon"><ellipse cx="256" cy="300" rx="150" ry="112"/></clipPath>
+    <ellipse cx="256" cy="372" rx="170" ry="80" fill="#E0B122" opacity=".6" clip-path="url(#lemon)"/>
+    <ellipse cx="210" cy="252" rx="62" ry="26" fill="#fff" opacity=".45"/>
+  </g>
+  <!-- лист -->
+  <path d="M338 176c8-62 58-98 118-96-6 64-50 102-118 96z" fill="#A6D37A"/>
+  <path d="M338 176c30-30 62-52 100-72" fill="none" stroke="#3B6236" stroke-width="7" stroke-linecap="round"/>
+  <path d="M338 176l-14 18" stroke="#3B6236" stroke-width="10" stroke-linecap="round"/>
+  <!-- капля -->
+  <path d="M130 72c0 0-44 52-44 82a44 44 0 0 0 88 0c0-30-44-82-44-82z" fill="#CFE7F5"/>
+  <ellipse cx="116" cy="158" rx="9" ry="15" fill="#fff" opacity=".8"/>
+</svg>
