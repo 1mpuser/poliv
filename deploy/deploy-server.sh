@@ -65,6 +65,12 @@ done
 $COMPOSE ps --format '{{.Service}}\t{{.Status}}'
 [ "$n" -ge 3 ] || { echo "Сервисы не стали healthy" >&2; exit 1; }
 
+CRON='25 3 * * * /opt/poliv/deploy/backup.sh >> /var/log/poliv-backup.log 2>&1'
+if ! crontab -l 2>/dev/null | grep -qF 'poliv/deploy/backup.sh'; then
+  echo "==> Ставлю ежедневный бэкап БД (03:25, /var/backups/poliv/db, 14 дней)"
+  (crontab -l 2>/dev/null; echo "$CRON") | crontab -
+fi
+
 # Проверка изнутри Caddy трекера: имя poliv-web резолвится и отвечает, а «frontend» по-прежнему трекера
 docker exec "$EDGE_CADDY" wget -qO- http://poliv-web/api/health; echo " ← poliv через сеть трекера"
 
@@ -72,7 +78,9 @@ if grep -q '# poliv:begin' "$EDGE_CADDYFILE"; then
   echo "==> Блок $DOMAIN в Caddyfile трекера уже есть — не трогаю"
 else
   echo "==> Добавляю $DOMAIN в Caddyfile трекера"
-  BACKUP="$EDGE_CADDYFILE.bak-before-poliv-$(date +%Y%m%d%H%M%S)"
+  # Бэкап вне репозитория трекера, чтобы не мусорить в его git status
+  mkdir -p /var/backups/poliv
+  BACKUP="/var/backups/poliv/$(basename "$EDGE_CADDYFILE").bak-$(date +%Y%m%d%H%M%S)"
   cp -p "$EDGE_CADDYFILE" "$BACKUP"
   # >> сохраняет inode: файл примонтирован в контейнер bind-mount'ом
   cat >> "$EDGE_CADDYFILE" <<CADDY

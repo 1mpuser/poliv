@@ -70,6 +70,7 @@ docker compose exec backend alembic revision --autogenerate -m "..."
 - Поэтому имена сервисов уникальны: `poliv-web` (не `frontend`), бэкенд для nginx — алиас `poliv-api`.
   Сервис с именем `frontend`/`backend` в сети трекера перехватит трафик трекера.
 - Порт 80 на сервере не трогать (acme.sh для VPN), UDP 443 не публиковать (hysteria). Сертификат — TLS-ALPN.
+- Бэкап БД: root-cron 03:25 → `/var/backups/poliv/db`, 14 дней (`deploy/backup.sh`).
 - Деплой/обновление: `bash deploy/deploy-server.sh` (уезжает HEAD, `.env` на сервере создаётся один раз).
 
 ## Правила
