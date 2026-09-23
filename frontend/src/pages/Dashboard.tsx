@@ -37,11 +37,11 @@ export function Dashboard() {
 
   async function toggleShared() {
     try {
-      const { is_on, session } = await api.toggleLamp(null);
+      const { is_on, session, previous_ended_at } = await api.toggleLamp(null);
       reload();
       toast(is_on ? 'Общая лампа включена' : 'Общая лампа выключена', async () => {
         if (is_on) await api.deleteLamp(session.id);
-        else await api.reopenLamp(session.id);
+        else await api.restoreLampEnd(session.id, previous_ended_at);
         reload();
       });
     } catch {

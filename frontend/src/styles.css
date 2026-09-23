@@ -25,6 +25,7 @@
   --ev-feed: #4E7A4A;
   --ev-lamp: #D69A1E;
   --ev-repot: #8A6A4B;
+  --ev-sun: #EFC53A;
 
   /* Плоды-миниатюры */
   --fruit-lemon: #F2CB3A;
@@ -63,6 +64,7 @@
     --ev-feed: #8CB883;
     --ev-lamp: #E9B44C;
     --ev-repot: #C39C78;
+    --ev-sun: #F6DB7A;
     --shadow: 0 1px 2px rgb(0 0 0 / .3), 0 10px 28px -14px rgb(0 0 0 / .6);
     color-scheme: dark;
   }
@@ -84,6 +86,7 @@
   --ev-feed: #8CB883;
   --ev-lamp: #E9B44C;
   --ev-repot: #C39C78;
+  --ev-sun: #F6DB7A;
   --shadow: 0 1px 2px rgb(0 0 0 / .3), 0 10px 28px -14px rgb(0 0 0 / .6);
   color-scheme: dark;
 }
@@ -514,3 +517,14 @@ body:has(.login) { padding-bottom: 0; }
 .creds__hint { font-size: 14px; color: var(--ink-2); }
 .input-row { display: flex; gap: 8px; }
 .input-row .input { flex: 1; min-width: 0; }
+
+/* Свет: подсказка и солнце на графике */
+.plant-card__foot[data-kind="light"] .i { color: var(--ev-lamp); }
+.plant-card__foot[data-kind="light"][data-status="soon"] span,
+.plant-card__foot[data-kind="light"][data-status="late"] span { color: var(--ink); }
+.bar__seg--sun { background: var(--ev-sun); }
+.sched-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; }
+.sched-row .input { width: auto; flex: 1; min-width: 0; min-height: 44px; }
+.sched-row span { color: var(--ink-2); }
+.city-results { display: grid; gap: 4px; margin-top: 8px; }
+.city-results button { text-align: left; justify-content: flex-start; }

@@ -30,7 +30,7 @@ const FLAG: Record<Status, string> = { ok: '', soon: 'скоро', late: 'пор
 
 /** Три плитки статуса. detailed — подписи с нормами для экрана растения. */
 export function PlantStats({ s, detailed }: { s: PlantSummary; detailed?: boolean }) {
-  const { water, feed, lamp } = s;
+  const { water, feed, light } = s;
 
   let feedValue = '—';
   let feedUnit = '';
@@ -66,11 +66,15 @@ export function PlantStats({ s, detailed }: { s: PlantSummary; detailed?: boolea
       <Tile
         icon="lamp"
         kind="lamp"
-        status={lamp.status}
-        value={fmtHours(lamp.hours_today)}
+        status={light.status}
+        value={fmtHours(light.total_hours)}
         unit="ч"
-        label={detailed ? `досветка из ${fmtHours(lamp.planned_hours)}` : 'досветка'}
-        flag={lamp.status === 'ok' ? '' : 'мало'}
+        label={
+          detailed && light.natural_hours !== null
+            ? `солнце ${fmtHours(light.natural_hours)} + лампа ${fmtHours(light.lamp_hours)} из ${fmtHours(light.target_hours)}`
+            : `свет из ${fmtHours(light.target_hours)}`
+        }
+        flag={light.status === 'ok' ? '' : 'мало'}
       />
     </div>
   );

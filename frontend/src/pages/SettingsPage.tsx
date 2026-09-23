@@ -4,6 +4,8 @@ import { api } from '../api';
 import { Field, Segmented, Stepper } from '../components/controls';
 import { AccountSection } from '../components/AccountSection';
 import { FertilizerList } from '../components/FertilizerList';
+import { LampScheduleEditor } from '../components/LampScheduleEditor';
+import { LightSettings } from '../components/LightSettings';
 import { PlantForm } from '../components/PlantForm';
 import { useToast } from '../components/toast';
 import { DAYS } from '../format';
@@ -23,12 +25,14 @@ function applyTheme(t: Theme) {
 
 const fields = ({ id: _id, added_at: _a, ...rest }: Plant): PlantFields => rest;
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+// Кнопкой «Сохранить» уходят только эти поля; город сохраняется сразу в блоке «Свет»
+const general = ({ current_season, notify_days_ahead }: AppSettings) => ({ current_season, notify_days_ahead });
 
 export function SettingsPage({ onLogout }: { onLogout: () => void }) {
   const toast = useToast();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
-  const { data, reload } = useAsync(() => Promise.all([api.plants(), api.settings()]), []);
+  const { data, reload } = useAsync(() => Promise.all([api.plants(), api.settings(), api.lampSchedules()]), []);
 
   // Черновики: сохраняются одной кнопкой «Сохранить», как в макете
   const [drafts, setDrafts] = useState<Record<number, PlantFields>>({});
@@ -47,14 +51,14 @@ export function SettingsPage({ onLogout }: { onLogout: () => void }) {
     return <header className="page-head"><div className="page-head__grow"><h1 className="page-head__title">Настройки</h1></div></header>;
   }
 
-  const [plants, app] = data;
+  const [plants, app, schedules] = data;
   const fromUrl = Number(params.get('plant'));
   const selectedId = plants.some((p) => p.id === fromUrl) ? fromUrl : plants[0]?.id;
   const selected = plants.find((p) => p.id === selectedId);
   const draft = selectedId != null ? drafts[selectedId] : undefined;
 
   const dirtyPlants = plants.filter((p) => drafts[p.id] && !same(drafts[p.id], fields(p)));
-  const appDirty = !same(appDraft, app);
+  const appDirty = !same(general(appDraft), general(app));
 
   async function save() {
     const invalid = dirtyPlants.find((p) => !drafts[p.id].name.trim());
@@ -66,7 +70,7 @@ export function SettingsPage({ onLogout }: { onLogout: () => void }) {
     try {
       await Promise.all([
         ...dirtyPlants.map((p) => api.updatePlant(p.id, drafts[p.id])),
-        appDirty ? api.updateSettings(appDraft!) : null,
+        appDirty ? api.updateSettings(general(appDraft!)) : null,
       ]);
       await reload();
       toast('Настройки сохранены');
@@ -134,6 +138,18 @@ export function SettingsPage({ onLogout }: { onLogout: () => void }) {
                   />
                 )}
                 {selected && (
+                  <>
+                    <h2 className="section__title" style={{ marginTop: 20 }}>Своя лампа</h2>
+                    <div className="form-group">
+                      <div className="field field--stack">
+                        <span className="field__label">Расписание розетки</span>
+                        <span className="field__hint">Часы лампы считаются по нему сами; кнопка «Лампа» — для включений вне расписания</span>
+                        <LampScheduleEditor plantId={selected.id} initial={schedules.filter((x) => x.plant_id === selected.id)} />
+                      </div>
+                    </div>
+                  </>
+                )}
+                {selected && (
                   <div className="btn-row" style={{ marginTop: 12 }}>
                     <button className="btn btn--sm" type="button" onClick={() => navigate(`/plants/${selected.id}`)}>
                       История растения
@@ -158,6 +174,9 @@ export function SettingsPage({ onLogout }: { onLogout: () => void }) {
             <p className="field__hint" style={{ marginTop: 8 }}>
               Определяет, какой интервал подкормки брать у удобрения.
             </p>
+
+            <h2 className="section__title" style={{ marginTop: 28 }}>Свет</h2>
+            <LightSettings initial={app} schedules={schedules} />
 
             <h2 className="section__title" style={{ marginTop: 28 }}>Напоминания</h2>
             <div className="form-group">

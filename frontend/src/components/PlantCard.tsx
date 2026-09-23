@@ -2,6 +2,7 @@ import { Link } from 'react-router';
 import { fmtDate, thumbClass } from '../format';
 import type { Fertilizer, PlantSummary } from '../types';
 import { Icon, Thumb } from './icons';
+import { LightHint } from './LightHint';
 import { PlantActions } from './PlantActions';
 import { PlantStats } from './PlantStats';
 
@@ -29,6 +30,8 @@ export function PlantCard({
       </Link>
 
       <PlantStats s={s} />
+
+      <LightHint light={s.light} />
 
       <p className="plant-card__foot" data-status={repot.status}>
         <Icon name="repot" />

@@ -179,3 +179,108 @@ def test_change_own_password(client, admin):
     assert ok.status_code == 200
     assert client.get("/api/plants", headers=auth(t)).status_code == 401
     assert client.get("/api/plants", headers=auth(ok.json()["access_token"])).status_code == 200
+
+
+# ---------- свет и расписание лампы ----------
+def _window_around_now():
+    """Интервал ±1 ч вокруг текущего местного времени, не переходящий через полночь."""
+    from datetime import datetime, time, timedelta
+
+    from app.config import settings
+
+    now = datetime.now(settings.zone)
+    start = max(now - timedelta(hours=1), now.replace(hour=0, minute=0, second=0, microsecond=0))
+    end = min(now + timedelta(hours=1), now.replace(hour=23, minute=59, second=0, microsecond=0))
+    return start.strftime("%H:%M"), end.strftime("%H:%M")
+
+
+def test_schedule_creates_sessions_and_toggle_ends_it(client, admin):
+    _, t = make_user(client, admin, "lamp@example.com")
+    plant = client.post("/api/plants", json={"name": "Лимон", "light_target_hours": 13}, headers=auth(t)).json()
+    start, end = _window_around_now()
+    r = client.put(
+        "/api/lamp-schedules",
+        json={"plant_id": plant["id"], "intervals": [{"start_time": start, "end_time": end}]},
+        headers=auth(t),
+    )
+    assert r.status_code == 200 and len(r.json()) == 1
+
+    s = client.get(f"/api/plants/{plant['id']}/summary", headers=auth(t)).json()
+    assert s["lamp"]["is_on"]  # горит по расписанию
+    assert s["light"]["natural_hours"] is None  # город не задан
+    assert s["light"]["lamp_hours"] > 0 and s["light"]["target_hours"] == 13
+    assert s["light"]["schedule"][0]["start_time"].startswith(start)
+
+    # Кнопка гасит сессию по расписанию раньше срока, отмена возвращает конец
+    off = client.post("/api/lamp-sessions/toggle", json={"plant_id": plant["id"]}, headers=auth(t)).json()
+    assert off["is_on"] is False and off["previous_ended_at"] is not None
+    assert not client.get(f"/api/plants/{plant['id']}/summary", headers=auth(t)).json()["lamp"]["is_on"]
+    client.patch(f"/api/lamp-sessions/{off['session']['id']}", json={"ended_at": off["previous_ended_at"]}, headers=auth(t))
+    assert client.get(f"/api/plants/{plant['id']}/summary", headers=auth(t)).json()["lamp"]["is_on"]
+
+    # Повторная замена расписания не плодит дубли сессий на сегодня
+    client.put("/api/lamp-schedules", json={"plant_id": plant["id"], "intervals": [{"start_time": start, "end_time": end}]}, headers=auth(t))
+    sessions = client.get(f"/api/lamp-sessions?plant_id={plant['id']}", headers=auth(t)).json()
+    assert len(sessions) == 1
+
+    # Пустое расписание — сегодняшние сессии по нему уходят
+    client.put("/api/lamp-schedules", json={"plant_id": plant["id"], "intervals": []}, headers=auth(t))
+    assert client.get(f"/api/lamp-sessions?plant_id={plant['id']}", headers=auth(t)).json() == []
+
+
+def test_schedule_validation_and_isolation(client, admin):
+    _, a = make_user(client, admin, "sched-a@example.com")
+    _, b = make_user(client, admin, "sched-b@example.com")
+    plant = client.post("/api/plants", json={"name": "P"}, headers=auth(a)).json()
+    bad = [
+        [{"start_time": "10:00", "end_time": "09:00"}],
+        [{"start_time": "07:00", "end_time": "10:00"}, {"start_time": "09:00", "end_time": "12:00"}],
+    ]
+    for intervals in bad:
+        r = client.put("/api/lamp-schedules", json={"plant_id": plant["id"], "intervals": intervals}, headers=auth(a))
+        assert r.status_code == 400
+    r = client.put("/api/lamp-schedules", json={"plant_id": plant["id"], "intervals": []}, headers=auth(b))
+    assert r.status_code == 404
+    client.put("/api/lamp-schedules", json={"plant_id": None, "intervals": [{"start_time": "18:00", "end_time": "22:00"}]}, headers=auth(a))
+    assert client.get("/api/lamp-schedules", headers=auth(b)).json() == []
+    assert len(client.get("/api/lamp-schedules", headers=auth(a)).json()) == 1
+
+
+def test_location_fetches_daylight(client, admin, monkeypatch):
+    from datetime import date, datetime, timedelta
+
+    from app.config import settings
+    from app.services import light
+
+    today = datetime.now(settings.zone).date()
+    calls = []
+
+    def fake_fetch(lat, lon):
+        calls.append((lat, lon))
+        return [
+            {
+                "day": today + timedelta(days=i),
+                "sunrise": datetime.combine(today, datetime.min.time(), settings.zone) + timedelta(hours=6),
+                "sunset": datetime.combine(today, datetime.min.time(), settings.zone) + timedelta(hours=18),
+                "daylight_hours": 12.0,
+                "sunshine_hours": 5.0,
+            }
+            for i in range(-2, 3)
+        ]
+
+    monkeypatch.setattr(light, "fetch_days", fake_fetch)
+    _, t = make_user(client, admin, "sun@example.com")
+    plant = client.post("/api/plants", json={"name": "P", "light_target_hours": 13}, headers=auth(t)).json()
+    r = client.patch("/api/settings", json={"location_name": "Мытищи", "latitude": 55.91, "longitude": 37.73}, headers=auth(t))
+    assert r.status_code == 200 and r.json()["location_name"] == "Мытищи"
+    assert calls == [(55.91, 37.73)]
+    assert client.get("/api/light/today", headers=auth(t)).json()["sunshine_hours"] == 5.0
+
+    light_s = client.get(f"/api/plants/{plant['id']}/summary", headers=auth(t)).json()["light"]
+    assert light_s["natural_hours"] == 5.0 and light_s["deficit_hours"] == 8.0
+    weekly = client.get(f"/api/plants/{plant['id']}/stats/weekly?weeks=1", headers=auth(t)).json()
+    assert weekly[0]["sunshine_hours"] > 0
+
+    # Тот же город повторно — без лишнего запроса
+    client.patch("/api/settings", json={"location_name": "Мытищи", "latitude": 55.91, "longitude": 37.73}, headers=auth(t))
+    assert len(calls) == 1

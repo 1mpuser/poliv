@@ -142,6 +142,19 @@ def lamp_hours_between(
     return total.total_seconds() / 3600
 
 
+def lamp_hours_in_day(
+    sessions: Sequence[Session], day: date, now: datetime, tz: ZoneInfo, plan: bool
+) -> float:
+    """Часы лампы за день. plan=True — план на весь день: запланированные (по расписанию) сессии
+    считаются целиком, горящая вручную — до now. plan=False — только уже отгоревшее."""
+    start, end = local_midnight(day, tz), local_midnight(day + timedelta(days=1), tz)
+    if not plan:
+        return lamp_hours_between(sessions, start, end, now)
+    # открытые сессии закрываем на now, закрытые берём целиком (в т.ч. будущие)
+    closed = [(s, e if e is not None else now) for s, e in sessions]
+    return lamp_hours_between(closed, start, end, end)
+
+
 def lamp_hours_today(sessions: Sequence[Session], now: datetime, tz: ZoneInfo) -> float:
     today = local_date(now, tz)
     return lamp_hours_between(
@@ -159,6 +172,54 @@ def lamp_status(hours: float, planned: float) -> Status:
     if ratio >= 0.5:
         return "soon"
     return "late"
+
+
+# ---------- свет: естественный + лампа против нормы ----------
+@dataclass(frozen=True)
+class LightState:
+    total_hours: float
+    deficit_hours: float
+    status: Status
+
+
+def light_state(target: float, natural: float | None, lamp: float) -> LightState:
+    """natural — солнечные часы за день (None: город не задан — считаем только лампу)."""
+    total = (natural or 0) + lamp
+    return LightState(total, max(0.0, target - total), lamp_status(total, target))
+
+
+def schedule_sessions_for_day(
+    intervals: Sequence[tuple[time, time]], day: date, tz: ZoneInfo
+) -> list[tuple[datetime, datetime]]:
+    """Интервалы расписания (местное время) → сессии лампы на конкретный день."""
+    return [
+        (datetime.combine(day, s, tzinfo=tz), datetime.combine(day, e, tzinfo=tz))
+        for s, e in sorted(intervals)
+    ]
+
+
+EVENING_DEFAULT = time(18)
+
+
+def suggest_lamp_window(
+    deficit_hours: float,
+    sunset: datetime | None,
+    lamp_ends: Sequence[datetime],
+    day: date,
+    tz: ZoneInfo,
+) -> tuple[datetime, datetime, bool] | None:
+    """Когда добрать недостающий свет: после заката и после последней работы лампы.
+    Возвращает (начало, конец, упёрлись_в_полночь) или None, если света хватает."""
+    if deficit_hours <= 0:
+        return None
+    starts = [e for e in lamp_ends if local_date(e, tz) == day]
+    starts.append(sunset if sunset is not None else datetime.combine(day, EVENING_DEFAULT, tzinfo=tz))
+    start = max(starts)
+    midnight = local_midnight(day + timedelta(days=1), tz)
+    end = start + timedelta(hours=deficit_hours)
+    if end > midnight:
+        return start, midnight, True
+    return start, end, False
 
 
 # ---------- пересадка ----------
@@ -192,6 +253,7 @@ class WeekStats:
     feedings: int
     lamp_hours: float
     is_current: bool
+    sunshine_hours: float = 0.0
 
 
 def weekly_stats(
@@ -201,6 +263,7 @@ def weekly_stats(
     weeks: int,
     now: datetime,
     tz: ZoneInfo,
+    sunshine: dict[date, float] | None = None,
 ) -> list[WeekStats]:
     """Последние `weeks` недель (с понедельника), последняя — текущая, неполная."""
     today = local_date(now, tz)
@@ -230,6 +293,9 @@ def weekly_stats(
                 now,
             ),
             is_current=ws == current,
+            sunshine_hours=sum(
+                h for d, h in (sunshine or {}).items() if ws <= d < ws + timedelta(days=7)
+            ),
         )
         for ws in starts
     ]

@@ -50,10 +50,13 @@ export function PlantActions({ s, fertilizers, onChanged, style }: Props) {
 
   const lamp = () =>
     run('lamp', async () => {
-      const { is_on, session } = await api.toggleLamp(plantId);
+      const { is_on, session, previous_ended_at } = await api.toggleLamp(plantId);
       return is_on
         ? { message: 'Лампа включена', undo: () => api.deleteLamp(session.id) }
-        : { message: 'Лампа выключена', undo: async () => { await api.reopenLamp(session.id); } };
+        : {
+            message: 'Лампа выключена',
+            undo: async () => { await api.restoreLampEnd(session.id, previous_ended_at); },
+          };
     });
 
   const feed = (fertilizerId: number, method: FeedMethod) => {

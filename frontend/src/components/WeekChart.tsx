@@ -14,12 +14,12 @@ export function WeekChart({ weeks, mode }: { weeks: WeekStat[]; mode: 'events' |
   const max =
     mode === 'events'
       ? Math.max(1, ...weeks.map((w) => w.waterings + w.feedings))
-      : Math.max(1, ...weeks.map((w) => w.lamp_hours));
+      : Math.max(1, ...weeks.map((w) => w.lamp_hours + w.sunshine_hours));
 
   const label =
     mode === 'events'
       ? `Поливы и подкормки по неделям: до ${Math.max(...weeks.map((w) => w.waterings))} поливов в неделю`
-      : `Часы досветки по неделям: до ${fmtHours(max)} ч в неделю`;
+      : `Свет по неделям, солнце и лампа: до ${fmtHours(max)} ч в неделю`;
 
   return (
     <>
@@ -31,7 +31,7 @@ export function WeekChart({ weeks, mode }: { weeks: WeekStat[]; mode: 'events' |
             title={
               mode === 'events'
                 ? `${range(w)}: полив ${w.waterings}, подкормка ${w.feedings}`
-                : `${range(w)}: ${fmtHours(w.lamp_hours)} ч досветки`
+                : `${range(w)}: солнце ${fmtHours(w.sunshine_hours)} ч, лампа ${fmtHours(w.lamp_hours)} ч`
             }
           >
             {mode === 'events' ? (
@@ -40,7 +40,10 @@ export function WeekChart({ weeks, mode }: { weeks: WeekStat[]; mode: 'events' |
                 <i className="bar__seg bar__seg--feed" style={{ '--n': w.feedings } as React.CSSProperties} />
               </>
             ) : (
-              <i className="bar__seg bar__seg--lamp" style={{ '--n': w.lamp_hours } as React.CSSProperties} />
+              <>
+                <i className="bar__seg bar__seg--sun" style={{ '--n': w.sunshine_hours } as React.CSSProperties} />
+                <i className="bar__seg bar__seg--lamp" style={{ '--n': w.lamp_hours } as React.CSSProperties} />
+              </>
             )}
           </div>
         ))}

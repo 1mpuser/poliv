@@ -11,7 +11,7 @@ export const EMPTY_PLANT: PlantFields = {
   notes: null,
   water_interval_days: 4,
   fertilizing_enabled: true,
-  lamp_hours_per_day: 12,
+  light_target_hours: 13,
   repot_check_interval_months: 12,
 };
 
@@ -103,8 +103,8 @@ export function PlantForm({ value, onChange }: { value: PlantFields; onChange: (
         <Field label="Полив" hint="Раз в столько дней">
           {(id) => <Stepper labelledBy={id} min={1} max={30} units={DAYS} value={value.water_interval_days} onChange={(v) => set('water_interval_days', v)} />}
         </Field>
-        <Field label="Досветка" hint="Часов в день">
-          {(id) => <Stepper labelledBy={id} min={0} max={16} units={HOURS} value={value.lamp_hours_per_day} onChange={(v) => set('lamp_hours_per_day', v)} />}
+        <Field label="Норма света" hint="Солнце + лампа, часов в день">
+          {(id) => <Stepper labelledBy={id} min={0} max={20} units={HOURS} value={value.light_target_hours} onChange={(v) => set('light_target_hours', v)} />}
         </Field>
         <Field label="Подкормка" hint="Удобрять сейчас">
           {(id) => <Switch labelledBy={id} checked={value.fertilizing_enabled} onChange={(v) => set('fertilizing_enabled', v)} />}

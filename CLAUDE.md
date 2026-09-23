@@ -58,6 +58,10 @@ docker compose exec backend alembic revision --autogenerate -m "..."
 - PATCH-эндпоинты используют `crud.apply_update` (`exclude_unset`): явный `null` — значимое значение
   (например, `ended_at: null` снова зажигает лампу — так работает «Отменить»).
 - Общая лампа (`plant_id IS NULL`) — своя у каждой учётки.
+- Свет: норма `plants.light_target_hours` = солнечные часы (Open-Meteo, город в `user_settings`, по дням в
+  `daylight_days`) + лампа. Расписания розетки (`lamp_schedules`) фоновая задача в `main.py` (lifespan,
+  раз в 30 мин) превращает в `lamp_sessions` со `schedule_id` — логика часов работает только с сессиями.
+  В тестах Open-Meteo подменять (`monkeypatch` `light.fetch_days`), в сеть не ходить.
 
 ## Фронтенд
 

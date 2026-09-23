@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from datetime import time as dtime
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -8,11 +9,15 @@ from app.services.summary import (
     add_months,
     feed_state,
     lamp_hours_between,
+    lamp_hours_in_day,
     lamp_hours_today,
     lamp_status,
+    light_state,
     pick_next_fertilizer,
     repot_state,
+    schedule_sessions_for_day,
     status_for,
+    suggest_lamp_window,
     water_state,
     weekly_stats,
 )
@@ -186,3 +191,61 @@ def test_weekly_stats_monday_weeks():
 def test_lamp_open_session_does_not_count_future():
     now = msk(2026, 9, 23, 10)
     assert lamp_hours_today([(now - timedelta(hours=1), None)], now, MSK) == pytest.approx(1)
+
+
+# ---------- свет: расписание, план дня, подсказка ----------
+
+def test_schedule_sessions_for_day_local_time():
+    s = schedule_sessions_for_day([(dtime(7), dtime(10)), (dtime(17), dtime(21, 30))], date(2026, 9, 24), MSK)
+    assert s == [(msk(2026, 9, 24, 7), msk(2026, 9, 24, 10)), (msk(2026, 9, 24, 17), msk(2026, 9, 24, 21, 30))]
+
+
+def test_lamp_hours_in_day_plan_counts_future_scheduled_but_open_until_now():
+    now = msk(2026, 9, 24, 12)
+    sessions = [
+        (msk(2026, 9, 24, 17), msk(2026, 9, 24, 21)),  # запланировано на вечер — 4 ч
+        (msk(2026, 9, 24, 10), None),                   # вручную с 10:00, горит — 2 ч до «сейчас»
+    ]
+    assert lamp_hours_in_day(sessions, date(2026, 9, 24), now, MSK, plan=True) == pytest.approx(6)
+    assert lamp_hours_in_day(sessions, date(2026, 9, 24), now, MSK, plan=False) == pytest.approx(2)
+
+
+@pytest.mark.parametrize(
+    "natural, lamp, target, total, deficit, status",
+    [
+        (1.5, 7, 13, 8.5, 4.5, "soon"),
+        (10, 4, 13, 14, 0, "ok"),
+        (0, 3, 13, 3, 10, "late"),
+        (None, 12, 12, 12, 0, "ok"),  # город не задан — только лампа
+    ],
+)
+def test_light_state(natural, lamp, target, total, deficit, status):
+    s = light_state(target, natural, lamp)
+    assert s.total_hours == pytest.approx(total)
+    assert s.deficit_hours == pytest.approx(deficit)
+    assert s.status == status
+
+
+def test_suggest_window_starts_after_sunset_and_last_lamp():
+    day = date(2026, 9, 24)
+    w = suggest_lamp_window(2.5, msk(2026, 9, 24, 18, 23), [msk(2026, 9, 24, 19)], day, MSK)
+    assert w == (msk(2026, 9, 24, 19), msk(2026, 9, 24, 21, 30), False)
+
+
+def test_suggest_window_without_location_starts_evening():
+    w = suggest_lamp_window(3, None, [], date(2026, 9, 24), MSK)
+    assert w == (msk(2026, 9, 24, 18), msk(2026, 9, 24, 21), False)
+
+
+def test_suggest_window_clamped_at_midnight():
+    w = suggest_lamp_window(8, msk(2026, 9, 24, 18), [], date(2026, 9, 24), MSK)
+    assert w == (msk(2026, 9, 24, 18), msk(2026, 9, 25, 0), True)
+
+
+def test_suggest_window_none_when_enough():
+    assert suggest_lamp_window(0, msk(2026, 9, 24, 18), [], date(2026, 9, 24), MSK) is None
+
+
+def test_weekly_stats_sunshine():
+    weeks = weekly_stats([], [], [], 1, msk(2026, 9, 23, 12), MSK, sunshine={date(2026, 9, 21): 5.5, date(2026, 9, 22): 1.0})
+    assert weeks[0].sunshine_hours == pytest.approx(6.5)

@@ -44,11 +44,24 @@ PATCH меняет только переданные поля; явный `null`
 | `feedings` | `{plant_id, fertilizer_type_id, method: root\|foliar, fed_at?, note?}` | |
 | `repottings` | `{plant_id, repotted_at?, pot_size_before?, pot_size_after?, note?}` | обновляет `pot_size_l` растения |
 
+## Свет
+
+| Метод | Путь | |
+|---|---|---|
+| GET | `/light/geocode?q=Мытищи` | Поиск города (Open-Meteo) → `[{name, region, country, latitude, longitude}]` |
+| GET | `/light/today` | Свет сегодня в городе учётки или `null` |
+| GET | `/lamp-schedules` | Все расписания ламп учётки |
+| PUT | `/lamp-schedules` | `{plant_id или null, intervals: [{start_time: "07:00", end_time: "10:00"}]}` — полная замена расписания одной лампы; пустой список — убрать. Конец раньше начала или пересечения — 400 |
+
+Город задаётся через `PATCH /settings` (`location_name`, `latitude`, `longitude`). В сводке растения
+блок `light`: норма, солнечные часы, световой день, восход/закат, часы лампы по плану, итог, нехватка,
+окно-подсказка, расписания своей и общей лампы.
+
 ## Лампа
 
 | Метод | Путь | |
 |---|---|---|
-| POST | `/lamp-sessions/toggle` | `{plant_id}` или `{plant_id: null}` (общая лампа) → `{is_on, session}` |
+| POST | `/lamp-sessions/toggle` | `{plant_id}` или `{plant_id: null}` (общая лампа) → `{is_on, session, previous_ended_at}`: гасит горящую (в т.ч. по расписанию), иначе включает |
 | GET | `/lamp-sessions` | `?plant_id=`, `?shared=true`, `?open=true` |
 | POST | `/lamp-sessions` | Ручная сессия; вторая горящая на то же растение → 409 |
 | GET / PATCH / DELETE | `/lamp-sessions/{id}` | |
@@ -59,4 +72,4 @@ PATCH меняет только переданные поля; явный `null`
 |---|---|---|
 | GET / POST | `/fertilizers` | Имя уникально в пределах учётки (409) |
 | GET / PATCH / DELETE | `/fertilizers/{id}` | Удаление не стирает историю подкормок |
-| GET / PATCH | `/settings` | `{current_season: active\|dormant, notify_days_ahead: 0–14}` |
+| GET / PATCH | `/settings` | `{current_season: active\|dormant, notify_days_ahead: 0–14, location_name, latitude, longitude}` |

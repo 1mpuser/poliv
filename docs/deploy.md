@@ -12,7 +12,8 @@
 | Контейнеры | `poliv-db-1`, `poliv-backend-1`, `poliv-poliv-web-1` |
 | DNS | reg.ru: A `@` и `www` → 213.108.23.47; NS `ns1/ns2.reg.ru` |
 | Сертификат | Let's Encrypt, выпускает и продлевает Caddy трекера через TLS-ALPN на 443 |
-| Бэкап БД | root-cron `25 3 * * *` → `/var/backups/poliv/db/poliv-ГГГГ-ММ-ДД.dump`, хранится 14 дней |
+| Бэкап БД | root-cron `25 3 * * *` → `/var/backups/poliv/db/poliv-ГГГГ-ММ-ДД.dump` (14 дней) + `predeploy-*.dump` перед каждой выкаткой (последние 10) |
+| Внешние сервисы | Open-Meteo (`api.open-meteo.com`, `geocoding-api.open-meteo.com`) — исходящий HTTPS для света |
 
 ### Соседи на сервере — что нельзя трогать
 
@@ -36,7 +37,7 @@ bash deploy/deploy-server.sh  # только деплой текущего HEAD
 
 1. `git archive HEAD` → `/opt/poliv` (незакоммиченное не уезжает — скрипт предупредит);
 2. создаёт `.env`, если его нет (секреты генерирует на сервере и не выводит);
-3. `up -d --build`, ждёт healthy у всех трёх сервисов;
+3. снимает бэкап БД `predeploy-*.dump`, затем `up -d --build`, ждёт healthy у всех трёх сервисов;
 4. ставит cron бэкапа, если его нет;
 5. проверяет, что Caddy трекера достаёт `poliv-web` по сети;
 6. дописывает блок в Caddyfile трекера, **только если его нет**; перед этим бэкап в
@@ -110,6 +111,8 @@ curl -s --resolve polivalochka.ru:443:213.108.23.47 https://polivalochka.ru/api/
 | С мака домен «не существует», а с сервера резолвится | sing-box TUN перехватывает DNS — проверять через DoH или `--resolve` |
 | `git pull` в деплое трекера падает на `Caddyfile.prod` | Наш блок — локальная правка в его репо: `git stash && git pull && git stash pop` |
 | Все запросы 401 после выкатки | Сменился `JWT_SECRET` в `.env` — это нормально, войти заново |
+| «Данные о свете ещё не получены» | Сервер не достучался до Open-Meteo: `$H "$C logs backend \| grep poliv.light"`; повтор — каждые 30 минут |
+| Лампа по расписанию не учитывается | Сессии на день создаёт фоновая задача backend — проверить, что он жив, и `GET /api/lamp-schedules` |
 
 ## Локальный стек
 

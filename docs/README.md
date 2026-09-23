@@ -10,6 +10,7 @@
 | [accounts.md](accounts.md) | Учётки: админка, CLI, восстановление доступа |
 | [api.md](api.md) | Все эндпоинты API (живой Swagger — `/api/docs`) |
 | [decisions.md](decisions.md) | Принятые решения и почему именно так — читать перед тем, как что-то «упрощать» |
+| [ideas.md](ideas.md) | Идеи на будущее, ещё не сделанные |
 | [history.md](history.md) | Что и когда сделано |
 
 Коротко:

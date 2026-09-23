@@ -11,7 +11,8 @@ export interface PlantFields {
   notes: string | null;
   water_interval_days: number;
   fertilizing_enabled: boolean;
-  lamp_hours_per_day: number;
+  /** Норма всего света в день: солнце + лампа */
+  light_target_hours: number;
   repot_check_interval_months: number;
 }
 
@@ -62,6 +63,7 @@ export interface PlantSummary {
     open_session_id: number | null;
     shared_is_on: boolean;
   };
+  light: LightSummary;
   repot: {
     last_at: string | null;
     interval_months: number;
@@ -74,6 +76,54 @@ export interface PlantSummary {
 export interface AppSettings {
   current_season: Season;
   notify_days_ahead: number;
+  location_name: string | null;
+  latitude: number | null;
+  longitude: number | null;
+}
+
+/** Интервал расписания, местное время 'HH:MM[:SS]' */
+export interface ScheduleInterval {
+  start_time: string;
+  end_time: string;
+}
+
+export interface LampSchedule extends ScheduleInterval {
+  id: number;
+  plant_id: number | null;
+}
+
+export interface LightSummary {
+  target_hours: number;
+  location_name: string | null;
+  natural_hours: number | null;
+  daylight_hours: number | null;
+  sunrise: string | null;
+  sunset: string | null;
+  lamp_hours: number;
+  total_hours: number;
+  deficit_hours: number;
+  status: Status;
+  suggestion_start: string | null;
+  suggestion_end: string | null;
+  suggestion_until_midnight: boolean;
+  schedule: ScheduleInterval[];
+  shared_schedule: ScheduleInterval[];
+}
+
+export interface Place {
+  name: string;
+  region: string | null;
+  country: string | null;
+  latitude: number;
+  longitude: number;
+}
+
+export interface Daylight {
+  day: string;
+  sunrise: string | null;
+  sunset: string | null;
+  daylight_hours: number;
+  sunshine_hours: number;
 }
 
 export interface LampSession {
@@ -103,6 +153,7 @@ export interface WeekStat {
   waterings: number;
   feedings: number;
   lamp_hours: number;
+  sunshine_hours: number;
   is_current: boolean;
 }
 

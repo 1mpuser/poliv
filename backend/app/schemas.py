@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -21,7 +21,7 @@ class PlantFields(BaseModel):
     notes: str | None = None
     water_interval_days: int = Field(4, ge=1, le=90)
     fertilizing_enabled: bool = True
-    lamp_hours_per_day: float = Field(12, ge=0, le=24)
+    light_target_hours: float = Field(12, ge=0, le=24)
     repot_check_interval_months: int = Field(12, ge=1, le=120)
 
 
@@ -37,7 +37,7 @@ class PlantUpdate(BaseModel):
     notes: str | None = None
     water_interval_days: int | None = Field(None, ge=1, le=90)
     fertilizing_enabled: bool | None = None
-    lamp_hours_per_day: float | None = Field(None, ge=0, le=24)
+    light_target_hours: float | None = Field(None, ge=0, le=24)
     repot_check_interval_months: int | None = Field(None, ge=1, le=120)
 
 
@@ -144,6 +144,25 @@ class LampToggle(BaseModel):
 class LampToggleOut(BaseModel):
     is_on: bool
     session: LampSessionOut
+    # Для отмены выключения: вернуть ended_at к этому значению (null — горела вручную)
+    previous_ended_at: datetime | None = None
+
+
+class ScheduleInterval(BaseModel):
+    start_time: time
+    end_time: time
+
+
+class LampScheduleOut(ORM, ScheduleInterval):
+    id: int
+    plant_id: int | None
+
+
+class LampScheduleSet(BaseModel):
+    """Полная замена расписания одной лампы: plant_id null — общая лампа."""
+
+    plant_id: int | None = None
+    intervals: list[ScheduleInterval] = Field(default_factory=list, max_length=8)
 
 
 class RepottingCreate(BaseModel):
@@ -174,11 +193,33 @@ class RepottingOut(ORM):
 class SettingsOut(ORM):
     current_season: Season
     notify_days_ahead: int
+    location_name: str | None
+    latitude: float | None
+    longitude: float | None
 
 
 class SettingsUpdate(BaseModel):
     current_season: Season | None = None
     notify_days_ahead: int | None = Field(None, ge=0, le=14)
+    location_name: str | None = Field(None, max_length=200)
+    latitude: float | None = Field(None, ge=-90, le=90)
+    longitude: float | None = Field(None, ge=-180, le=180)
+
+
+class Place(BaseModel):
+    name: str
+    region: str | None
+    country: str | None
+    latitude: float
+    longitude: float
+
+
+class DaylightOut(ORM):
+    day: date
+    sunrise: datetime | None
+    sunset: datetime | None
+    daylight_hours: float
+    sunshine_hours: float
 
 
 # ---------- Сводка ----------
@@ -211,6 +252,26 @@ class LampSummary(BaseModel):
     shared_is_on: bool
 
 
+class LightSummary(BaseModel):
+    """Свет сегодня: солнечные часы (с облачностью) + лампа по плану дня против нормы растения."""
+
+    target_hours: float
+    location_name: str | None
+    natural_hours: float | None  # None — город не задан или данных ещё нет
+    daylight_hours: float | None
+    sunrise: datetime | None
+    sunset: datetime | None
+    lamp_hours: float  # план на весь день: расписание + ручные включения
+    total_hours: float
+    deficit_hours: float
+    status: Status
+    suggestion_start: datetime | None  # когда добрать недостающее
+    suggestion_end: datetime | None
+    suggestion_until_midnight: bool  # даже до полуночи не хватит
+    schedule: list[ScheduleInterval]  # своя лампа
+    shared_schedule: list[ScheduleInterval]  # общая лампа
+
+
 class RepotSummary(BaseModel):
     last_at: datetime | None
     interval_months: int
@@ -225,6 +286,7 @@ class PlantSummary(BaseModel):
     water: WaterSummary
     feed: FeedSummary
     lamp: LampSummary
+    light: LightSummary
     repot: RepotSummary
 
 
@@ -254,6 +316,7 @@ class WeekStatOut(BaseModel):
     waterings: int
     feedings: int
     lamp_hours: float
+    sunshine_hours: float
     is_current: bool
 
 

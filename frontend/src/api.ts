@@ -1,16 +1,20 @@
 import type {
   AdminUser,
   AppSettings,
+  Daylight,
   EventType,
   FeedMethod,
   Fertilizer,
   FertilizerFields,
   HistoryEvent,
+  LampSchedule,
   LampSession,
   Me,
   Plant,
+  Place,
   PlantFields,
   PlantSummary,
+  ScheduleInterval,
   WeekStat,
 } from './types';
 
@@ -130,11 +134,22 @@ export const api = {
   deleteRepotting: (id: number) => del(`/repottings/${id}`),
 
   // Лампа: plantId=null — общая лампа
+  // Кнопка гасит то, что горит (вручную или по расписанию), иначе включает вручную
   toggleLamp: (plantId: number | null) =>
-    post<{ is_on: boolean; session: LampSession }>('/lamp-sessions/toggle', { plant_id: plantId }),
-  sharedLampOn: async () => (await get<LampSession[]>('/lamp-sessions?shared=true&open=true')).length > 0,
-  reopenLamp: (id: number) => patch<LampSession>(`/lamp-sessions/${id}`, { ended_at: null }),
+    post<{ is_on: boolean; session: LampSession; previous_ended_at: string | null }>(
+      '/lamp-sessions/toggle',
+      { plant_id: plantId },
+    ),
+  /** Отмена выключения: вернуть прежний конец (null — снова горит вручную) */
+  restoreLampEnd: (id: number, endedAt: string | null) => patch<LampSession>(`/lamp-sessions/${id}`, { ended_at: endedAt }),
   deleteLamp: (id: number) => del(`/lamp-sessions/${id}`),
+  lampSchedules: () => get<LampSchedule[]>('/lamp-schedules'),
+  setLampSchedule: (plantId: number | null, intervals: ScheduleInterval[]) =>
+    request<LampSchedule[]>('PUT', '/lamp-schedules', { plant_id: plantId, intervals }),
+
+  // Свет
+  geocode: (q: string) => get<Place[]>(`/light/geocode?q=${encodeURIComponent(q)}`),
+  lightToday: () => get<Daylight | null>('/light/today'),
 
   // Удобрения
   fertilizers: () => get<Fertilizer[]>('/fertilizers'),

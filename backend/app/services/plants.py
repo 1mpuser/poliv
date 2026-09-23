@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app import schemas
 from app.config import settings
 from app.models import (
+    DaylightDay,
     FeedingLog,
     FertilizerType,
     LampSession,
@@ -18,6 +19,7 @@ from app.models import (
     UserSettings,
     WateringLog,
 )
+from app.services import light as light_svc
 from app.services import summary as rules
 
 
@@ -52,12 +54,58 @@ def _lamp_sessions(db: Session, plant: Plant, since: datetime) -> list[rules.Ses
     return [(s, e) for s, e in rows]
 
 
-def open_session(db: Session, user_id: int, plant_id: int | None) -> LampSession | None:
-    """Горящая сессия растения или общей лампы (plant_id=None) учётки."""
+def covering_session(db: Session, user_id: int, plant_id: int | None, now: datetime) -> LampSession | None:
+    """Сессия лампы растения (или общей при plant_id=None), которая горит прямо сейчас:
+    включённая вручную или идущая по расписанию. Ручная — в приоритете."""
     cond = LampSession.plant_id.is_(None) if plant_id is None else LampSession.plant_id == plant_id
     return db.scalars(
-        select(LampSession).where(LampSession.user_id == user_id, cond, LampSession.ended_at.is_(None))
+        select(LampSession)
+        .where(
+            LampSession.user_id == user_id,
+            cond,
+            LampSession.started_at <= now,
+            or_(LampSession.ended_at.is_(None), LampSession.ended_at > now),
+        )
+        .order_by(LampSession.ended_at.is_(None).desc(), LampSession.started_at.desc())
     ).first()
+
+
+def _intervals(schedules) -> list[schemas.ScheduleInterval]:
+    return [schemas.ScheduleInterval(start_time=s.start_time, end_time=s.end_time) for s in schedules]
+
+
+def _light(
+    db: Session, plant: Plant, app: UserSettings, daylight: DaylightDay | None,
+    sessions: list[rules.Session], now: datetime,
+) -> schemas.LightSummary:
+    tz = settings.zone
+    today = rules.local_date(now, tz)
+    lamp = rules.lamp_hours_in_day(sessions, today, now, tz, plan=True)
+    natural = daylight.sunshine_hours if daylight else None
+    state = rules.light_state(plant.light_target_hours, natural, lamp)
+    window = rules.suggest_lamp_window(
+        state.deficit_hours, daylight.sunset if daylight else None,
+        [e or now for _, e in sessions], today, tz,
+    )
+    if window and window[1] <= now:  # подсказка уже в прошлом — только дефицит
+        window = None
+    return schemas.LightSummary(
+        target_hours=plant.light_target_hours,
+        location_name=app.location_name,
+        natural_hours=natural,
+        daylight_hours=daylight.daylight_hours if daylight else None,
+        sunrise=daylight.sunrise if daylight else None,
+        sunset=daylight.sunset if daylight else None,
+        lamp_hours=round(lamp, 2),
+        total_hours=round(state.total_hours, 2),
+        deficit_hours=round(state.deficit_hours, 2),
+        status=state.status,
+        suggestion_start=window[0] if window else None,
+        suggestion_end=window[1] if window else None,
+        suggestion_until_midnight=bool(window and window[2]),
+        schedule=_intervals(light_svc.schedules_for(db, plant.user_id, plant.id)),
+        shared_schedule=_intervals(light_svc.schedules_for(db, plant.user_id, None)),
+    )
 
 
 def build_summary(
@@ -66,6 +114,7 @@ def build_summary(
     app: UserSettings,
     fertilizers: Sequence[FertilizerType],
     now: datetime,
+    daylight: DaylightDay | None = None,
 ) -> schemas.PlantSummary:
     tz = settings.zone
     ahead = app.notify_days_ahead
@@ -88,8 +137,9 @@ def build_summary(
     )
 
     midnight = rules.local_midnight(rules.local_date(now, tz), tz)
-    hours = rules.lamp_hours_today(_lamp_sessions(db, plant, midnight), now, tz)
-    own = open_session(db, plant.user_id, plant.id)
+    sessions = _lamp_sessions(db, plant, midnight)
+    hours = rules.lamp_hours_today(sessions, now, tz)
+    own = covering_session(db, plant.user_id, plant.id, now)
 
     last_repot = db.scalar(
         select(func.max(RepottingLog.repotted_at)).where(RepottingLog.plant_id == plant.id)
@@ -119,12 +169,13 @@ def build_summary(
         ),
         lamp=schemas.LampSummary(
             hours_today=round(hours, 2),
-            planned_hours=plant.lamp_hours_per_day,
-            status=rules.lamp_status(hours, plant.lamp_hours_per_day),
+            planned_hours=plant.light_target_hours,
+            status=rules.lamp_status(hours, plant.light_target_hours),
             is_on=own is not None,
             open_session_id=own.id if own else None,
-            shared_is_on=open_session(db, plant.user_id, None) is not None,
+            shared_is_on=covering_session(db, plant.user_id, None, now) is not None,
         ),
+        light=_light(db, plant, app, daylight, sessions, now),
         repot=schemas.RepotSummary(
             last_at=last_repot,
             interval_months=plant.repot_check_interval_months,
@@ -139,7 +190,8 @@ def build_summaries(db: Session, user: User, plants: Sequence[Plant]) -> list[sc
     app = get_user_settings(db, user.id)
     fertilizers = db.scalars(select(FertilizerType).where(FertilizerType.user_id == user.id)).all()
     now = now_utc()
-    return [build_summary(db, p, app, fertilizers, now) for p in plants]
+    daylight = light_svc.today_daylight(db, user.id)
+    return [build_summary(db, p, app, fertilizers, now, daylight) for p in plants]
 
 
 def history(
@@ -228,13 +280,19 @@ def weekly(db: Session, plant: Plant, weeks: int) -> list[schemas.WeekStatOut]:
     feedings = db.scalars(
         select(FeedingLog.fed_at).where(FeedingLog.plant_id == plant_id, FeedingLog.fed_at >= since)
     ).all()
-    stats = rules.weekly_stats(waterings, feedings, _lamp_sessions(db, plant, since), weeks, now, tz)
+    sunshine = light_svc.sunshine_by_day(db, plant.user_id, since.date())
+    # будущие дни прогноза в статистику не попадают
+    sunshine = {d: h for d, h in sunshine.items() if d <= today}
+    stats = rules.weekly_stats(
+        waterings, feedings, _lamp_sessions(db, plant, since), weeks, now, tz, sunshine=sunshine
+    )
     return [
         schemas.WeekStatOut(
             week_start=w.week_start,
             waterings=w.waterings,
             feedings=w.feedings,
             lamp_hours=round(w.lamp_hours, 1),
+            sunshine_hours=round(w.sunshine_hours, 1),
             is_current=w.is_current,
         )
         for w in stats

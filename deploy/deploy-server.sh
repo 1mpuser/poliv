@@ -50,8 +50,18 @@ EDGE_NETWORK=$EDGE_NETWORK
 ENV
 fi
 
-echo "==> Сборка и запуск (без своего Caddy)"
 COMPOSE="docker compose -f docker-compose.yml -f docker-compose.server.yml"
+
+# Бэкап перед выкаткой: новая версия может принести миграцию. Хранятся последние 10.
+if [ "$($COMPOSE ps --format '{{.Service}} {{.Health}}' 2>/dev/null | grep -c '^db healthy')" = 1 ]; then
+  mkdir -p /var/backups/poliv/db
+  DUMP=/var/backups/poliv/db/predeploy-$(date +%Y%m%d-%H%M%S).dump
+  $COMPOSE exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "$DUMP"
+  echo "==> Бэкап перед выкаткой: $DUMP"
+  ls -1t /var/backups/poliv/db/predeploy-*.dump | tail -n +11 | xargs -r rm --
+fi
+
+echo "==> Сборка и запуск (без своего Caddy)"
 $COMPOSE up -d --build --remove-orphans
 
 echo "==> Жду healthy"

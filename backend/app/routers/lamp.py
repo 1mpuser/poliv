@@ -9,7 +9,7 @@ from app import crud, schemas
 from app.auth import CurrentUser
 from app.db import get_db
 from app.models import LampSession, User
-from app.services.plants import now_utc, open_session
+from app.services.plants import covering_session, now_utc
 
 router = APIRouter(prefix="/lamp-sessions", tags=["lamp"])
 DB = Annotated[Session, Depends(get_db)]
@@ -20,7 +20,7 @@ SHARED_LAMP_DEFAULT_HOURS = 12.0
 def _planned_hours(db: Session, user: User, plant_id: int | None) -> float:
     if plant_id is None:
         return SHARED_LAMP_DEFAULT_HOURS
-    return crud.owned_plant(db, user, plant_id).lamp_hours_per_day
+    return crud.owned_plant(db, user, plant_id).light_target_hours
 
 
 def _save(db: Session, obj: LampSession) -> LampSession:
@@ -78,14 +78,17 @@ def create_session(body: schemas.LampSessionCreate, user: CurrentUser, db: DB):
 
 @router.post("/toggle", response_model=schemas.LampToggleOut)
 def toggle(body: schemas.LampToggle, user: CurrentUser, db: DB):
-    """Выключает горящую лампу растения (или общую при plant_id=null), иначе включает."""
+    """Гасит то, что горит сейчас (включённую вручную или идущую по расписанию сессию),
+    иначе включает вручную. previous_ended_at нужен для отмены выключения."""
     planned = _planned_hours(db, user, body.plant_id)
-    current = open_session(db, user.id, body.plant_id)
+    now = now_utc()
+    current = covering_session(db, user.id, body.plant_id, now)
     if current is not None:
-        current.ended_at = now_utc()
-        return schemas.LampToggleOut(is_on=False, session=_save(db, current))
+        previous = current.ended_at
+        current.ended_at = now
+        return schemas.LampToggleOut(is_on=False, session=_save(db, current), previous_ended_at=previous)
     session = LampSession(
-        user_id=user.id, plant_id=body.plant_id, started_at=now_utc(), planned_hours_per_day=planned
+        user_id=user.id, plant_id=body.plant_id, started_at=now, planned_hours_per_day=planned
     )
     return schemas.LampToggleOut(is_on=True, session=_save(db, session))
 

@@ -4,6 +4,7 @@ import { api } from '../api';
 import { Sheet } from '../components/controls';
 import { History } from '../components/History';
 import { Icon, Thumb } from '../components/icons';
+import { LightHint } from '../components/LightHint';
 import { PlantActions } from '../components/PlantActions';
 import { PlantStats } from '../components/PlantStats';
 import { useToast } from '../components/toast';
@@ -14,11 +15,13 @@ import { useAsync } from '../useAsync';
 
 const WEEKS = 8;
 
-function avgLampPerDay(weeks: WeekStat[]): number {
-  // Текущая неделя неполная: считаем только прошедшие дни
+/** Среднее за день по неделям, где есть данные о свете (город и лампа могли появиться недавно).
+ *  Текущая неделя неполная — считаем только прошедшие дни. */
+function avgLightPerDay(weeks: WeekStat[]): number {
   const todayIdx = (new Date().getDay() + 6) % 7;
-  const days = (weeks.length - 1) * 7 + todayIdx + 1;
-  return weeks.reduce((sum, w) => sum + w.lamp_hours, 0) / days;
+  const withData = weeks.filter((w) => w.lamp_hours + w.sunshine_hours > 0);
+  const days = withData.reduce((n, w) => n + (w.is_current ? todayIdx + 1 : 7), 0);
+  return days ? withData.reduce((sum, w) => sum + w.lamp_hours + w.sunshine_hours, 0) / days : 0;
 }
 
 export function PlantPage() {
@@ -75,6 +78,7 @@ export function PlantPage() {
         </div>
 
         <PlantStats s={s} detailed />
+        <div style={{ marginTop: 12 }}><LightHint light={s.light} /></div>
         <PlantActions s={s} fertilizers={fertilizers} onChanged={refresh} style={{ marginTop: 12 }} />
         <div className="btn-row" style={{ marginTop: 8 }}>
           <button className="btn btn--sm" type="button" onClick={() => setRepotOpen(true)}>
@@ -91,7 +95,7 @@ export function PlantPage() {
             <div className="chart__summary">
               <div><b>{totalW}</b><span className="muted">{plural(totalW, ['полив', 'полива', 'поливов'])}</span></div>
               <div><b>{totalF}</b><span className="muted">{plural(totalF, ['подкормка', 'подкормки', 'подкормок'])}</span></div>
-              <div><b>{fmtHours(avgLampPerDay(weeks))} ч</b><span className="muted">свет в день</span></div>
+              <div><b>{fmtHours(avgLightPerDay(weeks))} ч</b><span className="muted">свет в день</span></div>
             </div>
             <WeekChart weeks={weeks} mode="events" />
             <div className="legend">
@@ -100,7 +104,8 @@ export function PlantPage() {
             </div>
             <WeekChart weeks={weeks} mode="lamp" />
             <div className="legend">
-              <span style={{ '--c': 'var(--ev-lamp)' } as React.CSSProperties}>Часы досветки за неделю</span>
+              <span style={{ '--c': 'var(--ev-sun)' } as React.CSSProperties}>Солнце</span>
+              <span style={{ '--c': 'var(--ev-lamp)' } as React.CSSProperties}>Лампа, часов за неделю</span>
             </div>
           </div>
         </section>
