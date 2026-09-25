@@ -5,7 +5,7 @@
 """
 
 import calendar
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Literal, Protocol, TypeVar
@@ -220,6 +220,52 @@ def suggest_lamp_window(
     if end > midnight:
         return start, midnight, True
     return start, end, False
+
+
+# ---------- лампы: периоды привязки и досветка до нормы ----------
+Period = tuple[datetime, datetime | None]  # растение стояло под лампой; конец None — стоит сейчас
+
+
+def clip_session(start: datetime, end: datetime | None, periods: Sequence[Period]) -> list[Session]:
+    """Части сессии лампы, пока растение стояло под ней. Закрытый период обрезает
+    и горящую сессию; в открытом горящая остаётся открытой."""
+    parts: list[Session] = []
+    for p_start, p_end in periods:
+        s = max(start, p_start)
+        if end is None:
+            e = p_end
+        elif p_end is None:
+            e = end
+        else:
+            e = min(end, p_end)
+        if e is None or e > s:
+            parts.append((s, e))
+    return parts
+
+
+def lamp_need(deficits: Iterable[float]) -> float:
+    """Сколько досвечивать лампе: по самому требовательному растению под ней."""
+    return max([0.0, *deficits])
+
+
+def plan_morning(
+    need: float, sunrise: datetime | None, not_before: time, day: date, tz: ZoneInfo
+) -> tuple[datetime, datetime] | None:
+    """Утренняя половина досветки: заканчивается на рассвете, начинается не раньше not_before."""
+    if need <= 0 or sunrise is None:
+        return None
+    start = max(sunrise - timedelta(hours=need / 2), datetime.combine(day, not_before, tzinfo=tz))
+    return (start, sunrise) if start < sunrise else None
+
+
+def plan_evening(
+    remaining: float, sunset: datetime | None, not_after: time, day: date, tz: ZoneInfo
+) -> tuple[datetime, datetime] | None:
+    """Вечерний остаток: с заката, но не позже not_after."""
+    if remaining <= 0 or sunset is None:
+        return None
+    end = min(sunset + timedelta(hours=remaining), datetime.combine(day, not_after, tzinfo=tz))
+    return (sunset, end) if end > sunset else None
 
 
 # ---------- пересадка ----------

@@ -7,13 +7,17 @@ import pytest
 
 from app.services.summary import (
     add_months,
+    clip_session,
     feed_state,
     lamp_hours_between,
     lamp_hours_in_day,
     lamp_hours_today,
+    lamp_need,
     lamp_status,
     light_state,
     pick_next_fertilizer,
+    plan_evening,
+    plan_morning,
     repot_state,
     schedule_sessions_for_day,
     status_for,
@@ -249,3 +253,52 @@ def test_suggest_window_none_when_enough():
 def test_weekly_stats_sunshine():
     weeks = weekly_stats([], [], [], 1, msk(2026, 9, 23, 12), MSK, sunshine={date(2026, 9, 21): 5.5, date(2026, 9, 22): 1.0})
     assert weeks[0].sunshine_hours == pytest.approx(6.5)
+
+
+# ---------- периоды привязки и досветка ----------
+def test_clip_session_to_periods():
+    periods = [(msk(2026, 1, 1, 8), msk(2026, 1, 1, 10)), (msk(2026, 1, 1, 12), None)]
+    assert clip_session(msk(2026, 1, 1, 7), msk(2026, 1, 1, 13), periods) == [
+        (msk(2026, 1, 1, 8), msk(2026, 1, 1, 10)),
+        (msk(2026, 1, 1, 12), msk(2026, 1, 1, 13)),
+    ]
+    # горящая сессия: закрытый период обрезает её своим концом, в открытом она горит дальше
+    assert clip_session(msk(2026, 1, 1, 9), None, periods) == [
+        (msk(2026, 1, 1, 9), msk(2026, 1, 1, 10)),
+        (msk(2026, 1, 1, 12), None),
+    ]
+    # между периодами растение под лампой не стояло
+    assert clip_session(msk(2026, 1, 1, 10, 30), msk(2026, 1, 1, 11), periods) == []
+
+
+def test_lamp_need_is_max_deficit():
+    assert lamp_need([4.0, 2.0]) == 4.0
+    assert lamp_need([]) == 0.0
+    assert lamp_need([0.0]) == 0.0
+
+
+D = date(2026, 1, 15)
+
+
+def test_plan_morning_half_ends_at_sunrise():
+    assert plan_morning(4, msk(2026, 1, 15, 9), dtime(6), D, MSK) == (msk(2026, 1, 15, 7), msk(2026, 1, 15, 9))
+
+
+def test_plan_morning_not_before_bound():
+    assert plan_morning(10, msk(2026, 1, 15, 9), dtime(6), D, MSK) == (msk(2026, 1, 15, 6), msk(2026, 1, 15, 9))
+
+
+def test_plan_morning_none_in_summer_or_when_enough():
+    summer = date(2026, 6, 15)
+    assert plan_morning(4, msk(2026, 6, 15, 4, 30), dtime(6), summer, MSK) is None
+    assert plan_morning(0, msk(2026, 1, 15, 9), dtime(6), D, MSK) is None
+    assert plan_morning(4, None, dtime(6), D, MSK) is None
+
+
+def test_plan_evening_from_sunset_bounded():
+    sunset = msk(2026, 1, 15, 16, 30)
+    assert plan_evening(2.5, sunset, dtime(23), D, MSK) == (sunset, msk(2026, 1, 15, 19))
+    assert plan_evening(8, sunset, dtime(23), D, MSK) == (sunset, msk(2026, 1, 15, 23))
+    assert plan_evening(0, sunset, dtime(23), D, MSK) is None
+    assert plan_evening(2, msk(2026, 1, 15, 23, 30), dtime(23), D, MSK) is None
+    assert plan_evening(2, None, dtime(23), D, MSK) is None
