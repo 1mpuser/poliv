@@ -41,9 +41,17 @@ docker compose exec backend alembic revision --autogenerate -m "..."
   из БД и собирает `PlantSummary`. Фронтенд статусы не вычисляет, только показывает поля сводки
   (`ok | soon | late | off`). Новое правило — сначала тест в `test_summary.py`.
 - Дни — календарные, в `settings.zone` (env `TZ`, Europe/Moscow). В БД всё `timestamptz`.
-- `LampSession.plant_id IS NULL` — общая лампа, её часы засчитываются всем растениям учётки; пересечения
-  объединяются (`lamp_hours_between`). Одна открытая сессия на растение — частичный unique-индекс
-  `uq_lamp_one_open` (миграции 0001/0002) (в моделях его нет, autogenerate может предложить его удалить — не соглашаться).
+- **Лампы** (`lamps`) — объекты учётки. Растение под лампой — период `plant_lamps` (открытый — не больше одного:
+  частичный unique-индекс `uq_plant_lamp_open`, миграция 0004; в моделях его нет — autogenerate не соглашаться удалять,
+  как и `uq_lamp_one_open`). Часы растения = сессии ламп его периодов, обрезанные по границам (`clip_session`),
+  пересечения объединяются (`lamp_hours_between`). Перенос/удаление лампы (архив, `archived_at`) историю не меняют.
+- Режимы лампы: `auto` (досветка до нормы: половина нехватки утром до рассвета, остаток после заката, по максимуму
+  среди растений лампы), `schedule` (интервалы `lamp_schedules`), `manual`. Всё превращается в `lamp_sessions`
+  (`source`); логика часов работает только с сессиями. Логика — `services/lamps.py`, правила — `summary.py`.
+- Розетка — устройство Умного дома Яндекса (`services/yandex.py`, токен учётки зашифрован `secret_box` ключом из
+  `JWT_SECRET`). Шаг раз в минуту (`lamps.tick`, lifespan в `main.py`): сессии по расписаниям, досветка, команда
+  розетке — только при смене нужного состояния (`lamps.last_state`). Свет по городу — раз в 30 мин (`light.sync_all`).
+  В тестах подменять `light.fetch_days`, `yandex.set_on`, `yandex.list_devices` — в сеть не ходить.
 - Сезон и порог «скоро» (`notify_days_ahead`) — в `user_settings`, остальные настройки ухода — поля `Plant`.
 - `FeedingLog.fertilizer_type_id` — `ON DELETE SET NULL`: удаление удобрения не трогает историю.
 - **Мультиучётки, данные изолированы.** `plants`, `fertilizer_types`, `lamp_sessions` имеют `user_id`,
@@ -57,11 +65,7 @@ docker compose exec backend alembic revision --autogenerate -m "..."
   Миграция 0002 отдала старые данные заглушке `owner@localhost.invalid` (id=1) — её «оживляет» `set-owner`.
 - PATCH-эндпоинты используют `crud.apply_update` (`exclude_unset`): явный `null` — значимое значение
   (например, `ended_at: null` снова зажигает лампу — так работает «Отменить»).
-- Общая лампа (`plant_id IS NULL`) — своя у каждой учётки.
-- Свет: норма `plants.light_target_hours` = солнечные часы (Open-Meteo, город в `user_settings`, по дням в
-  `daylight_days`) + лампа. Расписания розетки (`lamp_schedules`) фоновая задача в `main.py` (lifespan,
-  раз в 30 мин) превращает в `lamp_sessions` со `schedule_id` — логика часов работает только с сессиями.
-  В тестах Open-Meteo подменять (`monkeypatch` `light.fetch_days`), в сеть не ходить.
+- Город — в `user_settings`; норма света — поля `Plant`.
 
 ## Фронтенд
 

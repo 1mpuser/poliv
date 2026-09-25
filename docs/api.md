@@ -50,20 +50,31 @@ PATCH меняет только переданные поля; явный `null`
 |---|---|---|
 | GET | `/light/geocode?q=Мытищи` | Поиск города (Open-Meteo) → `[{name, region, country, latitude, longitude}]` |
 | GET | `/light/today` | Свет сегодня в городе учётки или `null` |
-| GET | `/lamp-schedules` | Все расписания ламп учётки |
-| PUT | `/lamp-schedules` | `{plant_id или null, intervals: [{start_time: "07:00", end_time: "10:00"}]}` — полная замена расписания одной лампы; пустой список — убрать. Конец раньше начала или пересечения — 400 |
 
 Город задаётся через `PATCH /settings` (`location_name`, `latitude`, `longitude`). В сводке растения
 блок `light`: норма, солнечные часы, световой день, восход/закат, часы лампы по плану, итог, нехватка,
-окно-подсказка, расписания своей и общей лампы.
+окно-подсказка и `lamp` (краткая сводка лампы растения).
 
-## Лампа
+## Лампы
 
 | Метод | Путь | |
 |---|---|---|
-| POST | `/lamp-sessions/toggle` | `{plant_id}` или `{plant_id: null}` (общая лампа) → `{is_on, session, previous_ended_at}`: гасит горящую (в т.ч. по расписанию), иначе включает |
-| GET | `/lamp-sessions` | `?plant_id=`, `?shared=true`, `?open=true` |
-| POST | `/lamp-sessions` | Ручная сессия; вторая горящая на то же растение → 409 |
+| GET | `/lamps` | Лампы учётки (без архивных): растения, режим, розетка, горит ли, расписание, досветка на сегодня |
+| POST | `/lamps` | `{name, mode: auto/schedule/manual, device_id, device_name, morning_not_before, evening_not_after, plant_ids}`; `auto` без города — 400 |
+| GET / PATCH / DELETE | `/lamps/{id}` | PATCH — поля как в POST, `plant_ids` — полная замена; DELETE — в архив (история сохраняется) |
+| PUT | `/lamps/{id}/schedule` | `{intervals}` — только в режиме `schedule`; пересечения/конец раньше начала — 400 |
+| POST | `/lamps/{id}/toggle` | Кнопка лампы; ответ как у `/lamp-sessions/toggle` + `plug_error` |
+| PUT | `/plants/{id}/lamp` | `{lamp_id или null}` — перенести растение |
+| GET | `/yandex/devices` | Устройства Умного дома с вкл/выкл; без токена — 400 |
+| PUT | `/settings/yandex-token` | `{token или null}` — проверяется у Яндекса; токен в ответах не возвращается, в `GET /settings` — `yandex_status` |
+
+## Сессии лампы
+
+| Метод | Путь | |
+|---|---|---|
+| POST | `/lamp-sessions/toggle` | `{plant_id}` — кнопка «Лампа» у растения (его лампы и соседей по ней); без лампы — 400 → `{is_on, session, previous_ended_at, plug_error}`: гасит горящую (в т.ч. по расписанию), иначе включает |
+| GET | `/lamp-sessions` | `?lamp_id=`, `?open=true` |
+| POST | `/lamp-sessions` | `{lamp_id, ...}` Ручная сессия; вторая горящая на ту же лампу → 409 |
 | GET / PATCH / DELETE | `/lamp-sessions/{id}` | |
 
 ## Удобрения и настройки
