@@ -25,7 +25,7 @@ function describe(e: HistoryEvent): { title: string; note: string } {
       };
     case 'lamp':
       return {
-        title: e.shared ? 'Общая лампа' : 'Лампа',
+        title: e.lamp_name ?? 'Лампа',
         note: e.ended_at
           ? `${fmtTime(e.at)}–${fmtTime(e.ended_at)}, ${fmtHours(e.hours ?? 0)} ч`
           : `Горит с ${fmtTime(e.at)}`,

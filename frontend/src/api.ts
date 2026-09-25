@@ -7,8 +7,10 @@ import type {
   Fertilizer,
   FertilizerFields,
   HistoryEvent,
-  LampSchedule,
+  Lamp,
+  LampFields,
   LampSession,
+  LampToggle,
   Me,
   Plant,
   Place,
@@ -16,6 +18,7 @@ import type {
   PlantSummary,
   ScheduleInterval,
   WeekStat,
+  YandexDevice,
 } from './types';
 
 const TOKEN_KEY = 'token';
@@ -133,19 +136,27 @@ export const api = {
     post<{ id: number }>('/repottings', { plant_id: plantId, ...data }),
   deleteRepotting: (id: number) => del(`/repottings/${id}`),
 
-  // Лампа: plantId=null — общая лампа
-  // Кнопка гасит то, что горит (вручную или по расписанию), иначе включает вручную
-  toggleLamp: (plantId: number | null) =>
-    post<{ is_on: boolean; session: LampSession; previous_ended_at: string | null }>(
-      '/lamp-sessions/toggle',
-      { plant_id: plantId },
-    ),
+  // Лампы
+  lamps: () => get<Lamp[]>('/lamps'),
+  createLamp: (data: LampFields & { plant_ids: number[] }) => post<Lamp>('/lamps', data),
+  updateLamp: (id: number, data: Partial<LampFields> & { plant_ids?: number[] }) => patch<Lamp>(`/lamps/${id}`, data),
+  /** Лампа уходит в архив: растения без лампы, история часов сохраняется */
+  archiveLamp: (id: number) => del(`/lamps/${id}`),
+  setLampSchedule: (lampId: number, intervals: ScheduleInterval[]) =>
+    request<ScheduleInterval[]>('PUT', `/lamps/${lampId}/schedule`, { intervals }),
+  setPlantLamp: (plantId: number, lampId: number | null) =>
+    request<{ lamp_id: number | null }>('PUT', `/plants/${plantId}/lamp`, { lamp_id: lampId }),
+  // Кнопка гасит то, что горит (вручную, по расписанию, досветка), иначе включает вручную
+  toggleLamp: (plantId: number) => post<LampToggle>('/lamp-sessions/toggle', { plant_id: plantId }),
+  toggleLampById: (lampId: number) => post<LampToggle>(`/lamps/${lampId}/toggle`),
   /** Отмена выключения: вернуть прежний конец (null — снова горит вручную) */
   restoreLampEnd: (id: number, endedAt: string | null) => patch<LampSession>(`/lamp-sessions/${id}`, { ended_at: endedAt }),
-  deleteLamp: (id: number) => del(`/lamp-sessions/${id}`),
-  lampSchedules: () => get<LampSchedule[]>('/lamp-schedules'),
-  setLampSchedule: (plantId: number | null, intervals: ScheduleInterval[]) =>
-    request<LampSchedule[]>('PUT', '/lamp-schedules', { plant_id: plantId, intervals }),
+  deleteLampSession: (id: number) => del(`/lamp-sessions/${id}`),
+
+  // Умный дом Яндекса
+  yandexDevices: () => get<YandexDevice[]>('/yandex/devices'),
+  /** null — удалить токен */
+  setYandexToken: (token: string | null) => request<AppSettings>('PUT', '/settings/yandex-token', { token }),
 
   // Свет
   geocode: (q: string) => get<Place[]>(`/light/geocode?q=${encodeURIComponent(q)}`),

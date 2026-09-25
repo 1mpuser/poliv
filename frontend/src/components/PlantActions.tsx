@@ -48,15 +48,16 @@ export function PlantActions({ s, fertilizers, onChanged, style }: Props) {
       return { message: 'Полив записан', undo: () => api.deleteWatering(id) };
     });
 
+  const lampBrief = s.light.lamp;
+
   const lamp = () =>
     run('lamp', async () => {
-      const { is_on, session, previous_ended_at } = await api.toggleLamp(plantId);
+      const { is_on, session, previous_ended_at, plug_error } = await api.toggleLamp(plantId);
+      const base = `${lampBrief?.name ?? 'Лампа'}: ${is_on ? 'включена' : 'выключена'}`;
+      const message = plug_error ? `${base}, но розетка не ответила: ${plug_error}` : base;
       return is_on
-        ? { message: 'Лампа включена', undo: () => api.deleteLamp(session.id) }
-        : {
-            message: 'Лампа выключена',
-            undo: async () => { await api.restoreLampEnd(session.id, previous_ended_at); },
-          };
+        ? { message, undo: () => api.deleteLampSession(session.id) }
+        : { message, undo: async () => { await api.restoreLampEnd(session.id, previous_ended_at); } };
     });
 
   const feed = (fertilizerId: number, method: FeedMethod) => {
@@ -78,7 +79,14 @@ export function PlantActions({ s, fertilizers, onChanged, style }: Props) {
         <button className={cls('feed')} type="button" disabled={busy === 'feed'} onClick={() => setFeedOpen(true)}>
           <Icon name="feed" />Подкормить
         </button>
-        <button className={cls('lamp')} type="button" aria-pressed={s.lamp.is_on} disabled={busy === 'lamp'} onClick={lamp}>
+        <button
+          className={cls('lamp')}
+          type="button"
+          aria-pressed={s.lamp.is_on}
+          disabled={busy === 'lamp' || !lampBrief}
+          title={lampBrief ? undefined : 'Привяжите лампу в настройках'}
+          onClick={lamp}
+        >
           <Icon name="lamp" />
           <span>{s.lamp.is_on ? 'Лампа горит' : 'Лампа'}</span>
         </button>

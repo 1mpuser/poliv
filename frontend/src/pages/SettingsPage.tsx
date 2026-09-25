@@ -4,7 +4,7 @@ import { api } from '../api';
 import { Field, Segmented, Stepper } from '../components/controls';
 import { AccountSection } from '../components/AccountSection';
 import { FertilizerList } from '../components/FertilizerList';
-import { LampScheduleEditor } from '../components/LampScheduleEditor';
+import { LampList } from '../components/LampList';
 import { LightSettings } from '../components/LightSettings';
 import { PlantForm } from '../components/PlantForm';
 import { useToast } from '../components/toast';
@@ -32,7 +32,8 @@ export function SettingsPage({ onLogout }: { onLogout: () => void }) {
   const toast = useToast();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
-  const { data, reload } = useAsync(() => Promise.all([api.plants(), api.settings(), api.lampSchedules()]), []);
+  const { data, reload } = useAsync(() => Promise.all([api.plants(), api.settings()]), []);
+  const { data: lamps, reload: reloadLamps } = useAsync(() => api.lamps(), []);
 
   // Черновики: сохраняются одной кнопкой «Сохранить», как в макете
   const [drafts, setDrafts] = useState<Record<number, PlantFields>>({});
@@ -51,7 +52,7 @@ export function SettingsPage({ onLogout }: { onLogout: () => void }) {
     return <header className="page-head"><div className="page-head__grow"><h1 className="page-head__title">Настройки</h1></div></header>;
   }
 
-  const [plants, app, schedules] = data;
+  const [plants, app] = data;
   const fromUrl = Number(params.get('plant'));
   const selectedId = plants.some((p) => p.id === fromUrl) ? fromUrl : plants[0]?.id;
   const selected = plants.find((p) => p.id === selectedId);
@@ -90,6 +91,18 @@ export function SettingsPage({ onLogout }: { onLogout: () => void }) {
       toast(`${p.name} удалён(а)`);
     } catch {
       toast('Не удалось удалить');
+    }
+  }
+
+  const lampOf = (plantId: number) => lamps?.find((l) => l.plant_ids.includes(plantId))?.id;
+
+  async function movePlant(p: Plant, lampId: number | null) {
+    try {
+      await api.setPlantLamp(p.id, lampId);
+      await reloadLamps();
+      toast(lampId ? `${p.name}: ${lamps?.find((l) => l.id === lampId)?.name}` : `${p.name}: без лампы`);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Не удалось сохранить');
     }
   }
 
@@ -139,13 +152,22 @@ export function SettingsPage({ onLogout }: { onLogout: () => void }) {
                 )}
                 {selected && (
                   <>
-                    <h2 className="section__title" style={{ marginTop: 20 }}>Своя лампа</h2>
+                    <h2 className="section__title" style={{ marginTop: 20 }}>Лампа</h2>
                     <div className="form-group">
-                      <div className="field field--stack">
-                        <span className="field__label">Расписание розетки</span>
-                        <span className="field__hint">Часы лампы считаются по нему сами; кнопка «Лампа» — для включений вне расписания</span>
-                        <LampScheduleEditor plantId={selected.id} initial={schedules.filter((x) => x.plant_id === selected.id)} />
-                      </div>
+                      <Field label="Под какой лампой стоит" hint="Часы этой лампы засчитываются растению">
+                        {(id) => (
+                          <select
+                            className="select"
+                            style={{ maxWidth: 220 }}
+                            aria-labelledby={id}
+                            value={lampOf(selected.id) ?? ''}
+                            onChange={(e) => movePlant(selected, e.target.value ? Number(e.target.value) : null)}
+                          >
+                            <option value="">Без лампы</option>
+                            {lamps?.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+                          </select>
+                        )}
+                      </Field>
                     </div>
                   </>
                 )}
@@ -176,7 +198,10 @@ export function SettingsPage({ onLogout }: { onLogout: () => void }) {
             </p>
 
             <h2 className="section__title" style={{ marginTop: 28 }}>Свет</h2>
-            <LightSettings initial={app} schedules={schedules} />
+            <LightSettings initial={app} />
+
+            <h2 className="section__title" style={{ marginTop: 28 }}>Лампы</h2>
+            <LampList lamps={lamps ?? []} plants={plants} onChanged={reloadLamps} />
 
             <h2 className="section__title" style={{ marginTop: 28 }}>Напоминания</h2>
             <div className="form-group">

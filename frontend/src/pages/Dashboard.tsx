@@ -4,7 +4,7 @@ import { Icon } from '../components/icons';
 import { PlantCard } from '../components/PlantCard';
 import { useToast } from '../components/toast';
 import { fmtToday } from '../format';
-import type { PlantSummary, Status } from '../types';
+import type { Lamp, PlantSummary, Status } from '../types';
 import { useAsync } from '../useAsync';
 
 /** Сводка «что сделать сейчас» из статусов, посчитанных бэкендом */
@@ -29,18 +29,18 @@ function todo(list: PlantSummary[]): { status: Status; text: string } {
 export function Dashboard() {
   const toast = useToast();
   const { data, error, reload } = useAsync(
-    () => Promise.all([api.summaries(), api.fertilizers()]),
+    () => Promise.all([api.summaries(), api.fertilizers(), api.lamps()]),
     [],
   );
-  const [summaries, fertilizers] = data ?? [undefined, []];
-  const sharedOn = summaries?.[0]?.lamp.shared_is_on ?? false;
+  const [summaries, fertilizers, lamps] = data ?? [undefined, [], []];
 
-  async function toggleShared() {
+  async function toggle(l: Lamp) {
     try {
-      const { is_on, session, previous_ended_at } = await api.toggleLamp(null);
+      const { is_on, session, previous_ended_at, plug_error } = await api.toggleLampById(l.id);
       reload();
-      toast(is_on ? 'Общая лампа включена' : 'Общая лампа выключена', async () => {
-        if (is_on) await api.deleteLamp(session.id);
+      const base = `${l.name}: ${is_on ? 'включена' : 'выключена'}`;
+      toast(plug_error ? `${base}, но розетка не ответила: ${plug_error}` : base, async () => {
+        if (is_on) await api.deleteLampSession(session.id);
         else await api.restoreLampEnd(session.id, previous_ended_at);
         reload();
       });
@@ -70,12 +70,14 @@ export function Dashboard() {
         </p>
       )}
 
-      {summaries && summaries.length > 0 && (
+      {lamps.length > 0 && (
         <div className="toolbar">
-          <button className="chip" type="button" aria-pressed={sharedOn} data-on={sharedOn} onClick={toggleShared}>
-            <Icon name="lamp" />
-            {sharedOn ? 'Общая лампа горит' : 'Общая лампа'}
-          </button>
+          {lamps.map((l) => (
+            <button className="chip" type="button" key={l.id} aria-pressed={l.is_on} data-on={l.is_on} onClick={() => toggle(l)}>
+              <Icon name="lamp" />
+              {l.is_on ? `${l.name} горит` : l.name}
+            </button>
+          ))}
         </div>
       )}
 

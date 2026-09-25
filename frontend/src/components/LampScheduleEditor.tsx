@@ -11,9 +11,8 @@ const hours = (list: ScheduleInterval[]) =>
     return sum + Math.max(0, eh * 60 + em - (sh * 60 + sm)) / 60;
   }, 0);
 
-/** Расписание программируемой розетки одной лампы. Сохраняется сразу, отдельно от формы настроек.
- *  plantId=null — общая лампа. */
-export function LampScheduleEditor({ plantId, initial }: { plantId: number | null; initial: ScheduleInterval[] }) {
+/** Расписание лампы. Сохраняется сразу, отдельно от формы. */
+export function LampScheduleEditor({ lampId, initial }: { lampId: number; initial: ScheduleInterval[] }) {
   const toast = useToast();
   const [rows, setRows] = useState<ScheduleInterval[]>(initial.map((i) => ({ start_time: hhmm(i.start_time), end_time: hhmm(i.end_time) })));
   const [saved, setSaved] = useState(JSON.stringify(rows));
@@ -22,7 +21,7 @@ export function LampScheduleEditor({ plantId, initial }: { plantId: number | nul
     const next = initial.map((i) => ({ start_time: hhmm(i.start_time), end_time: hhmm(i.end_time) }));
     setRows(next);
     setSaved(JSON.stringify(next));
-  }, [plantId, JSON.stringify(initial)]);
+  }, [lampId, JSON.stringify(initial)]);
 
   const dirty = JSON.stringify(rows) !== saved;
   const set = (i: number, key: keyof ScheduleInterval, v: string) =>
@@ -31,7 +30,7 @@ export function LampScheduleEditor({ plantId, initial }: { plantId: number | nul
   async function save() {
     setBusy(true);
     try {
-      const res = await api.setLampSchedule(plantId, rows.filter((r) => r.start_time && r.end_time));
+      const res = await api.setLampSchedule(lampId, rows.filter((r) => r.start_time && r.end_time));
       const next = res.map((i) => ({ start_time: hhmm(i.start_time), end_time: hhmm(i.end_time) }));
       setRows(next);
       setSaved(JSON.stringify(next));

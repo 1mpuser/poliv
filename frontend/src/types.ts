@@ -61,7 +61,6 @@ export interface PlantSummary {
     status: Status;
     is_on: boolean;
     open_session_id: number | null;
-    shared_is_on: boolean;
   };
   light: LightSummary;
   repot: {
@@ -73,23 +72,75 @@ export interface PlantSummary {
   };
 }
 
+export type YandexStatus = 'none' | 'ok' | 'invalid';
+export type LampMode = 'auto' | 'schedule' | 'manual';
+
+/** Интервал досветки на сегодня */
+export interface PlannedInterval {
+  start: string;
+  end: string | null;
+}
+
+export interface LampFields {
+  name: string;
+  mode: LampMode;
+  device_id: string | null;
+  device_name: string | null;
+  /** 'HH:MM[:SS]' */
+  morning_not_before: string;
+  evening_not_after: string;
+}
+
+export interface Lamp extends LampFields {
+  id: number;
+  last_state: boolean | null;
+  last_error: string | null;
+  last_error_at: string | null;
+  plant_ids: number[];
+  is_on: boolean;
+  schedule: ScheduleInterval[];
+  planned: PlannedInterval[];
+}
+
+/** Лампа растения в сводке */
+export interface LampBrief {
+  id: number;
+  name: string;
+  mode: LampMode;
+  is_on: boolean;
+  has_device: boolean;
+  planned: PlannedInterval[];
+  last_error: string | null;
+}
+
+export interface LampToggle {
+  is_on: boolean;
+  session: LampSession;
+  previous_ended_at: string | null;
+  /** Сессия записана, но розетка не ответила */
+  plug_error: string | null;
+}
+
+export interface YandexDevice {
+  id: string;
+  name: string;
+  room: string | null;
+  type: string;
+}
+
 export interface AppSettings {
   current_season: Season;
   notify_days_ahead: number;
   location_name: string | null;
   latitude: number | null;
   longitude: number | null;
+  yandex_status: YandexStatus;
 }
 
 /** Интервал расписания, местное время 'HH:MM[:SS]' */
 export interface ScheduleInterval {
   start_time: string;
   end_time: string;
-}
-
-export interface LampSchedule extends ScheduleInterval {
-  id: number;
-  plant_id: number | null;
 }
 
 export interface LightSummary {
@@ -106,8 +157,7 @@ export interface LightSummary {
   suggestion_start: string | null;
   suggestion_end: string | null;
   suggestion_until_midnight: boolean;
-  schedule: ScheduleInterval[];
-  shared_schedule: ScheduleInterval[];
+  lamp: LampBrief | null;
 }
 
 export interface Place {
@@ -128,7 +178,8 @@ export interface Daylight {
 
 export interface LampSession {
   id: number;
-  plant_id: number | null;
+  lamp_id: number;
+  source: 'manual' | 'schedule' | 'auto';
   started_at: string;
   ended_at: string | null;
   planned_hours_per_day: number;
@@ -143,7 +194,7 @@ export interface HistoryEvent {
   method: FeedMethod | null;
   ended_at: string | null;
   hours: number | null;
-  shared: boolean | null;
+  lamp_name: string | null;
   pot_size_before: number | null;
   pot_size_after: number | null;
 }
