@@ -9,6 +9,7 @@ from app import crud, schemas
 from app.auth import CurrentUser
 from app.db import get_db
 from app.models import Plant
+from app.services import lamps as lamps_svc
 from app.services import plants as svc
 
 router = APIRouter(prefix="/plants", tags=["plants"])
@@ -76,3 +77,13 @@ def plant_weekly_stats(
     plant_id: int, user: CurrentUser, db: DB, weeks: Annotated[int, Query(ge=1, le=52)] = 8
 ):
     return svc.weekly(db, crud.owned_plant(db, user, plant_id), weeks)
+
+
+@router.put("/{plant_id}/lamp", response_model=schemas.PlantLampSet)
+def set_plant_lamp(plant_id: int, body: schemas.PlantLampSet, user: CurrentUser, db: DB):
+    """Перенести растение под другую лампу (null — без лампы). Прошлые часы не меняются."""
+    plant = crud.owned_plant(db, user, plant_id)
+    if body.lamp_id is not None:
+        crud.owned_lamp(db, user, body.lamp_id)
+    lamps_svc.move_plant(db, plant.id, body.lamp_id, svc.now_utc())
+    return body

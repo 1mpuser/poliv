@@ -114,12 +114,23 @@ def test_data_isolation(client, admin):
     )
     assert r.status_code == 404
 
-    # Общая лампа — своя у каждой учётки
-    assert client.post("/api/lamp-sessions/toggle", json={"plant_id": None}, headers=auth(a)).json()["is_on"]
-    assert client.post("/api/lamp-sessions/toggle", json={"plant_id": None}, headers=auth(b)).json()["is_on"]
-    summary_b = client.get(f"/api/plants/{plant_b['id']}/summary", headers=auth(b)).json()
-    assert summary_b["lamp"]["shared_is_on"]
-    assert client.get("/api/plants/summary", headers=auth(a)).json()[0]["plant"]["name"] == "Фикус A"
+    # Лампы — свои у каждой учётки
+    lamp_a = client.post("/api/lamps", json={"name": "Лампа A", "plant_ids": [plant["id"]]}, headers=auth(a)).json()
+    for method, path, body in [
+        ("GET", f"/api/lamps/{lamp_a['id']}", None),
+        ("PATCH", f"/api/lamps/{lamp_a['id']}", {"name": "взлом"}),
+        ("DELETE", f"/api/lamps/{lamp_a['id']}", None),
+        ("POST", f"/api/lamps/{lamp_a['id']}/toggle", None),
+        ("PUT", f"/api/lamps/{lamp_a['id']}/schedule", {"intervals": []}),
+        ("PUT", f"/api/plants/{plant_b['id']}/lamp", {"lamp_id": lamp_a["id"]}),
+        ("POST", "/api/lamps", {"name": "чужое растение", "plant_ids": [plant["id"]]}),
+        ("POST", "/api/lamp-sessions", {"lamp_id": lamp_a["id"]}),
+    ]:
+        r = client.request(method, path, json=body, headers=auth(b))
+        assert r.status_code == 404, (method, path, r.status_code)
+    assert client.get("/api/lamps", headers=auth(b)).json() == []
+    assert client.post(f"/api/lamps/{lamp_a['id']}/toggle", headers=auth(a)).json()["is_on"]
+    assert client.get(f"/api/plants/{plant['id']}/summary", headers=auth(a)).json()["lamp"]["is_on"]
 
 
 def test_admin_endpoints_hidden_from_users(client, admin):
@@ -194,56 +205,240 @@ def _window_around_now():
     return start.strftime("%H:%M"), end.strftime("%H:%M")
 
 
-def test_schedule_creates_sessions_and_toggle_ends_it(client, admin):
+def test_schedule_lamp_lights_its_plants_and_toggle_ends_it(client, admin):
     _, t = make_user(client, admin, "lamp@example.com")
-    plant = client.post("/api/plants", json={"name": "Лимон", "light_target_hours": 13}, headers=auth(t)).json()
-    start, end = _window_around_now()
-    r = client.put(
-        "/api/lamp-schedules",
-        json={"plant_id": plant["id"], "intervals": [{"start_time": start, "end_time": end}]},
+    lemon = client.post("/api/plants", json={"name": "Лимон", "light_target_hours": 13}, headers=auth(t)).json()
+    lime = client.post("/api/plants", json={"name": "Лайм"}, headers=auth(t)).json()
+    lamp = client.post(
+        "/api/lamps",
+        json={"name": "Лампа цитрусы", "mode": "schedule", "plant_ids": [lemon["id"], lime["id"]]},
         headers=auth(t),
-    )
+    ).json()
+    assert lamp["plant_ids"] == sorted([lemon["id"], lime["id"]])
+    start, end = _window_around_now()
+    r = client.put(f"/api/lamps/{lamp['id']}/schedule", json={"intervals": [{"start_time": start, "end_time": end}]}, headers=auth(t))
     assert r.status_code == 200 and len(r.json()) == 1
 
-    s = client.get(f"/api/plants/{plant['id']}/summary", headers=auth(t)).json()
-    assert s["lamp"]["is_on"]  # горит по расписанию
-    assert s["light"]["natural_hours"] is None  # город не задан
-    assert s["light"]["lamp_hours"] > 0 and s["light"]["target_hours"] == 13
-    assert s["light"]["schedule"][0]["start_time"].startswith(start)
+    for p in (lemon, lime):
+        s = client.get(f"/api/plants/{p['id']}/summary", headers=auth(t)).json()
+        assert s["lamp"]["is_on"] and s["light"]["lamp_hours"] > 0
+        assert s["light"]["lamp"]["name"] == "Лампа цитрусы"
 
-    # Кнопка гасит сессию по расписанию раньше срока, отмена возвращает конец
-    off = client.post("/api/lamp-sessions/toggle", json={"plant_id": plant["id"]}, headers=auth(t)).json()
+    # Кнопка у лимона гасит общую с лаймом лампу, отмена возвращает конец
+    off = client.post("/api/lamp-sessions/toggle", json={"plant_id": lemon["id"]}, headers=auth(t)).json()
     assert off["is_on"] is False and off["previous_ended_at"] is not None
-    assert not client.get(f"/api/plants/{plant['id']}/summary", headers=auth(t)).json()["lamp"]["is_on"]
+    assert not client.get(f"/api/plants/{lime['id']}/summary", headers=auth(t)).json()["lamp"]["is_on"]
     client.patch(f"/api/lamp-sessions/{off['session']['id']}", json={"ended_at": off["previous_ended_at"]}, headers=auth(t))
-    assert client.get(f"/api/plants/{plant['id']}/summary", headers=auth(t)).json()["lamp"]["is_on"]
+    assert client.get(f"/api/plants/{lime['id']}/summary", headers=auth(t)).json()["lamp"]["is_on"]
 
-    # Повторная замена расписания не плодит дубли сессий на сегодня
-    client.put("/api/lamp-schedules", json={"plant_id": plant["id"], "intervals": [{"start_time": start, "end_time": end}]}, headers=auth(t))
-    sessions = client.get(f"/api/lamp-sessions?plant_id={plant['id']}", headers=auth(t)).json()
-    assert len(sessions) == 1
+    # Повторная замена расписания не плодит дубли, пустое — убирает сегодняшние сессии
+    client.put(f"/api/lamps/{lamp['id']}/schedule", json={"intervals": [{"start_time": start, "end_time": end}]}, headers=auth(t))
+    assert len(client.get(f"/api/lamp-sessions?lamp_id={lamp['id']}", headers=auth(t)).json()) == 1
+    client.put(f"/api/lamps/{lamp['id']}/schedule", json={"intervals": []}, headers=auth(t))
+    assert client.get(f"/api/lamp-sessions?lamp_id={lamp['id']}", headers=auth(t)).json() == []
 
-    # Пустое расписание — сегодняшние сессии по нему уходят
-    client.put("/api/lamp-schedules", json={"plant_id": plant["id"], "intervals": []}, headers=auth(t))
-    assert client.get(f"/api/lamp-sessions?plant_id={plant['id']}", headers=auth(t)).json() == []
+    # Расписание — только в режиме «По расписанию»
+    client.patch(f"/api/lamps/{lamp['id']}", json={"mode": "manual"}, headers=auth(t))
+    r = client.put(f"/api/lamps/{lamp['id']}/schedule", json={"intervals": [{"start_time": "18:00", "end_time": "22:00"}]}, headers=auth(t))
+    assert r.status_code == 400
 
 
-def test_schedule_validation_and_isolation(client, admin):
-    _, a = make_user(client, admin, "sched-a@example.com")
-    _, b = make_user(client, admin, "sched-b@example.com")
-    plant = client.post("/api/plants", json={"name": "P"}, headers=auth(a)).json()
+def test_lamp_validation(client, admin):
+    _, t = make_user(client, admin, "sched@example.com")
+    lamp = client.post("/api/lamps", json={"name": "L", "mode": "schedule"}, headers=auth(t)).json()
     bad = [
         [{"start_time": "10:00", "end_time": "09:00"}],
         [{"start_time": "07:00", "end_time": "10:00"}, {"start_time": "09:00", "end_time": "12:00"}],
     ]
     for intervals in bad:
-        r = client.put("/api/lamp-schedules", json={"plant_id": plant["id"], "intervals": intervals}, headers=auth(a))
+        r = client.put(f"/api/lamps/{lamp['id']}/schedule", json={"intervals": intervals}, headers=auth(t))
         assert r.status_code == 400
-    r = client.put("/api/lamp-schedules", json={"plant_id": plant["id"], "intervals": []}, headers=auth(b))
-    assert r.status_code == 404
-    client.put("/api/lamp-schedules", json={"plant_id": None, "intervals": [{"start_time": "18:00", "end_time": "22:00"}]}, headers=auth(a))
-    assert client.get("/api/lamp-schedules", headers=auth(b)).json() == []
-    assert len(client.get("/api/lamp-schedules", headers=auth(a)).json()) == 1
+    r = client.patch(f"/api/lamps/{lamp['id']}", json={"morning_not_before": "23:00", "evening_not_after": "06:00"}, headers=auth(t))
+    assert r.status_code == 400
+    # «Авто» без города — нельзя
+    r = client.post("/api/lamps", json={"name": "A", "mode": "auto"}, headers=auth(t))
+    assert r.status_code == 400 and "город" in r.json()["detail"]
+
+
+def test_plant_without_lamp_cannot_toggle(client, admin):
+    _, t = make_user(client, admin, "nolamp@example.com")
+    plant = client.post("/api/plants", json={"name": "P"}, headers=auth(t)).json()
+    r = client.post("/api/lamp-sessions/toggle", json={"plant_id": plant["id"]}, headers=auth(t))
+    assert r.status_code == 400 and "лампы" in r.json()["detail"]
+    s = client.get(f"/api/plants/{plant['id']}/summary", headers=auth(t)).json()
+    assert s["light"]["lamp"] is None and s["lamp"]["is_on"] is False
+
+
+def test_move_and_archive_keep_history(client, admin):
+    _, t = make_user(client, admin, "move@example.com")
+    plant = client.post("/api/plants", json={"name": "P"}, headers=auth(t)).json()
+    a = client.post("/api/lamps", json={"name": "A", "plant_ids": [plant["id"]]}, headers=auth(t)).json()
+    b = client.post("/api/lamps", json={"name": "B"}, headers=auth(t)).json()
+
+    def flick(lamp_id):
+        client.post(f"/api/lamps/{lamp_id}/toggle", headers=auth(t))
+        client.post(f"/api/lamps/{lamp_id}/toggle", headers=auth(t))
+
+    def lamp_names():
+        events = client.get(f"/api/plants/{plant['id']}/history?types=lamp", headers=auth(t)).json()
+        return sorted(e["lamp_name"] for e in events)
+
+    flick(a["id"])
+    assert lamp_names() == ["A"]
+    r = client.put(f"/api/plants/{plant['id']}/lamp", json={"lamp_id": b["id"]}, headers=auth(t))
+    assert r.status_code == 200
+    flick(a["id"])  # A светит уже без растения — в его историю не попадает
+    flick(b["id"])
+    assert lamp_names() == ["A", "B"]
+
+    assert client.delete(f"/api/lamps/{a['id']}", headers=auth(t)).status_code == 204
+    assert client.get(f"/api/lamps/{a['id']}", headers=auth(t)).status_code == 404
+    assert [l["name"] for l in client.get("/api/lamps", headers=auth(t)).json()] == ["B"]
+    assert lamp_names() == ["A", "B"]
+
+
+def test_yandex_token_is_encrypted_and_never_returned(client, admin, monkeypatch):
+    from app.db import SessionLocal
+    from app.models import UserSettings
+    from app.services import yandex
+
+    def fake_list(token):
+        if token != "y0_good-token-123":
+            raise yandex.YandexAuthError("Яндекс не принял токен")
+        return [yandex.Device("dev-1", "Лампа цитрусы", "Спальня", "devices.types.socket")]
+
+    monkeypatch.setattr(yandex, "list_devices", fake_list)
+    uid, t = make_user(client, admin, "token@example.com")
+    assert client.get("/api/settings", headers=auth(t)).json()["yandex_status"] == "none"
+    assert client.get("/api/yandex/devices", headers=auth(t)).status_code == 400
+    assert client.put("/api/settings/yandex-token", json={"token": "y0_bad-token-123"}, headers=auth(t)).status_code == 400
+
+    r = client.put("/api/settings/yandex-token", json={"token": "y0_good-token-123"}, headers=auth(t))
+    assert r.status_code == 200 and r.json()["yandex_status"] == "ok" and "y0_good" not in r.text
+    assert client.get("/api/yandex/devices", headers=auth(t)).json() == [
+        {"id": "dev-1", "name": "Лампа цитрусы", "room": "Спальня", "type": "devices.types.socket"}
+    ]
+    with SessionLocal() as db:
+        stored = db.get(UserSettings, uid).yandex_token
+        assert stored and "y0_good" not in stored
+    r = client.put("/api/settings/yandex-token", json={"token": None}, headers=auth(t))
+    assert r.json()["yandex_status"] == "none"
+
+
+def test_auto_lamp_plans_and_drives_plug(client, admin, monkeypatch):
+    from datetime import date, datetime
+
+    from sqlalchemy import select
+
+    from app.config import settings
+    from app.db import SessionLocal
+    from app.models import DaylightDay, Lamp, LampMode, LampSession, LampSource
+    from app.services import lamps, light, yandex
+
+    tz = settings.zone
+    day = date(2030, 1, 15)
+
+    def at(h, m=0):
+        return datetime(2030, 1, 15, h, m, tzinfo=tz)
+
+    calls = []
+    monkeypatch.setattr(light, "fetch_days", lambda lat, lon: [])
+    monkeypatch.setattr(yandex, "list_devices", lambda token: [])
+    monkeypatch.setattr(yandex, "set_on", lambda token, dev, on: calls.append((dev, on)))
+
+    uid, t = make_user(client, admin, "auto@example.com")
+    lemon = client.post("/api/plants", json={"name": "Лимон", "light_target_hours": 12}, headers=auth(t)).json()
+    lime = client.post("/api/plants", json={"name": "Лайм", "light_target_hours": 10}, headers=auth(t)).json()
+    client.patch("/api/settings", json={"location_name": "Москва", "latitude": 55.75, "longitude": 37.62}, headers=auth(t))
+    client.put("/api/settings/yandex-token", json={"token": "y0_test-token-123"}, headers=auth(t))
+    lamp = client.post(
+        "/api/lamps",
+        json={"name": "Лампа цитрусы", "mode": "auto", "device_id": "dev-1", "device_name": "Розетка",
+              "plant_ids": [lemon["id"], lime["id"]]},
+        headers=auth(t),
+    )
+    assert lamp.status_code == 201, lamp.text
+    lamp_id = lamp.json()["id"]
+
+    def planned(db):
+        q = select(LampSession).where(LampSession.lamp_id == lamp_id, LampSession.source == LampSource.auto).order_by(LampSession.started_at)
+        return [(s.started_at, s.ended_at) for s in db.scalars(q)]
+
+    with SessionLocal() as db:
+        db.merge(DaylightDay(user_id=uid, day=day, sunrise=at(9), sunset=at(16, 30), daylight_hours=7.5, sunshine_hours=2.0))
+        db.commit()
+        calls.clear()  # при создании лампы розетке уже ушло «выкл»
+
+        lamps.tick(db, now=at(5))
+        # лимону не хватает 10 ч: утро — половина, но не раньше 06:00 (3 ч); вечер — остаток 7 ч, но до 23:00
+        assert planned(db) == [(at(6), at(9)), (at(16, 30), at(23))]
+        assert calls == []  # розетка уже выключена
+
+        lamps.tick(db, now=at(6, 30))
+        assert calls == [("dev-1", True)]
+        lamps.tick(db, now=at(6, 31))
+        assert calls == [("dev-1", True)]  # команда только при смене состояния
+
+        # Выключили кнопкой посреди утра — утро не создаётся заново
+        lamps.toggle(db, db.get(Lamp, lamp_id), at(6, 40))
+        assert calls[-1] == ("dev-1", False)
+        lamps.tick(db, now=at(6, 41))
+        assert calls[-1] == ("dev-1", False) and len(planned(db)) == 2
+
+        # Смена режима во время вечерней досветки: идущая гаснет, розетке «выкл»
+        lamps.tick(db, now=at(17))
+        assert calls[-1] == ("dev-1", True)
+        lamps.update(db, db.get(Lamp, lamp_id), {"mode": LampMode.manual}, None, at(17, 5))
+        assert planned(db)[-1] == (at(16, 30), at(17, 5))
+        assert calls[-1] == ("dev-1", False)
+
+
+def test_plug_errors_and_archive(client, admin, monkeypatch):
+    from app.db import SessionLocal
+    from app.services import lamps, yandex
+
+    state = {"fail": True}
+    calls = []
+
+    def fake_set_on(token, dev, on):
+        calls.append((dev, on))
+        if state["fail"]:
+            raise yandex.YandexError("Умный дом Яндекса недоступен")
+
+    monkeypatch.setattr(yandex, "set_on", fake_set_on)
+    monkeypatch.setattr(yandex, "list_devices", lambda token: [])
+    _, t = make_user(client, admin, "plug@example.com")
+    plant = client.post("/api/plants", json={"name": "P"}, headers=auth(t)).json()
+
+    # Розетка задана, а токена нет — ошибка в лампе, без падения
+    lamp = client.post("/api/lamps", json={"name": "L", "device_id": "dev-9", "plant_ids": [plant["id"]]}, headers=auth(t)).json()
+    assert lamp["last_error"] == "Не задан токен Яндекса"
+    client.put("/api/settings/yandex-token", json={"token": "y0_test-token-123"}, headers=auth(t))
+
+    on = client.post(f"/api/lamps/{lamp['id']}/toggle", headers=auth(t)).json()
+    assert on["is_on"] and on["plug_error"] == "Умный дом Яндекса недоступен"  # сессия записана
+    got = client.get(f"/api/lamps/{lamp['id']}", headers=auth(t)).json()
+    assert got["last_state"] is None and got["last_error"] == "Умный дом Яндекса недоступен"
+
+    state["fail"] = False
+    with SessionLocal() as db:
+        lamps.tick(db)  # повтор на следующем шаге
+    got = client.get(f"/api/lamps/{lamp['id']}", headers=auth(t)).json()
+    assert got["last_state"] is True and got["last_error"] is None
+
+    # Удалили горящую лампу — розетке «выкл»
+    assert client.delete(f"/api/lamps/{lamp['id']}", headers=auth(t)).status_code == 204
+    assert calls[-1] == ("dev-9", False)
+
+    # 401 от Яндекса — токен помечается недействительным
+    lamp2 = client.post("/api/lamps", json={"name": "L2", "device_id": "dev-8"}, headers=auth(t)).json()
+
+    def auth_fail(token, dev, on):
+        raise yandex.YandexAuthError("Яндекс не принял токен")
+
+    monkeypatch.setattr(yandex, "set_on", auth_fail)
+    client.post(f"/api/lamps/{lamp2['id']}/toggle", headers=auth(t))
+    assert client.get("/api/settings", headers=auth(t)).json()["yandex_status"] == "invalid"
 
 
 def test_location_fetches_daylight(client, admin, monkeypatch):
