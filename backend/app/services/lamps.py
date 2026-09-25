@@ -5,7 +5,7 @@ import logging
 from collections import defaultdict
 from collections.abc import Collection
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
@@ -129,9 +129,6 @@ def toggle(db: Session, lamp: Lamp, now: datetime) -> Toggled:
 
 
 # ---------- досветка до нормы ----------
-NOON = time(12)
-
-
 def _today_bounds(now: datetime) -> tuple[datetime, datetime]:
     tz = settings.zone
     day = rules.local_date(now, tz)
@@ -176,8 +173,10 @@ def _add_auto(db: Session, lamp: Lamp, window: tuple[datetime, datetime] | None,
 
 
 def replan_auto(db: Session, lamp: Lamp, now: datetime) -> None:
-    """Досветка на сегодня: не начавшиеся части (утро до рассвета, вечер после заката) пересоздаются
-    по свежим данным; начавшиеся и прошедшие не трогаются — в том числе выключенные кнопкой."""
+    """Досветка на сегодня: не начавшиеся части (утро до рассвета, вечер после заката, день между ними)
+    пересоздаются по свежим данным; начавшиеся и прошедшие не трогаются — в том числе выключенные кнопкой.
+    Части определяются по солнцу: утро — до рассвета, вечер — с заката, день — между ними (в пасмурный день
+    остаток, который не влез в вечер, добирается днём вплотную перед закатом)."""
     tz = settings.zone
     day = rules.local_date(now, tz)
     autos = _auto_today(db, lamp, now)
@@ -186,17 +185,24 @@ def replan_auto(db: Session, lamp: Lamp, now: datetime) -> None:
             db.delete(s)
     db.flush()
     started = [s for s in autos if s.started_at <= now]
-    noon = datetime.combine(day, NOON, tzinfo=tz)
     daylight = db.get(DaylightDay, (lamp.user_id, day))
     ids = plant_ids(db, lamp.id)
     if daylight is not None and ids:
         natural = daylight.sunshine_hours
-        if not any(s.started_at < noon for s in started):
+        sunrise, sunset = daylight.sunrise, daylight.sunset
+        if sunrise is not None and not any(s.started_at < sunrise for s in started):
             need = _worst_deficit(db, ids, natural, now)
-            _add_auto(db, lamp, rules.plan_morning(need, daylight.sunrise, lamp.morning_not_before, day, tz), now)
-        if not any(s.started_at >= noon for s in started):
+            _add_auto(db, lamp, rules.plan_morning(need, sunrise, lamp.morning_not_before, day, tz), now)
+        if sunset is not None and not any(s.started_at >= sunset for s in started):
             remaining = _worst_deficit(db, ids, natural, now)  # утро уже учтено
-            _add_auto(db, lamp, rules.plan_evening(remaining, daylight.sunset, lamp.evening_not_after, day, tz), now)
+            _add_auto(db, lamp, rules.plan_evening(remaining, sunset, lamp.evening_not_after, day, tz), now)
+        if (
+            sunrise is not None
+            and sunset is not None
+            and not any(sunrise <= s.started_at < sunset for s in started)
+        ):
+            remaining = _worst_deficit(db, ids, natural, now)  # утро и вечер уже учтены
+            _add_auto(db, lamp, rules.plan_day(remaining, sunrise, sunset), now)
     db.commit()
 
 

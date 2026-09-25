@@ -16,6 +16,7 @@ from app.services.summary import (
     lamp_status,
     light_state,
     pick_next_fertilizer,
+    plan_day,
     plan_evening,
     plan_morning,
     repot_state,
@@ -302,3 +303,22 @@ def test_plan_evening_from_sunset_bounded():
     assert plan_evening(0, sunset, dtime(23), D, MSK) is None
     assert plan_evening(2, msk(2026, 1, 15, 23, 30), dtime(23), D, MSK) is None
     assert plan_evening(2, None, dtime(23), D, MSK) is None
+
+
+SUNRISE = msk(2026, 1, 15, 9)
+SUNSET = msk(2026, 1, 15, 16, 30)
+
+
+def test_plan_day_window_before_sunset():
+    assert plan_day(0.5, SUNRISE, SUNSET) == (msk(2026, 1, 15, 16), SUNSET)
+
+
+def test_plan_day_clamps_at_sunrise():
+    # остаток больше светового дня — начинаем с рассвета
+    assert plan_day(10, SUNRISE, SUNSET) == (SUNRISE, SUNSET)
+
+
+def test_plan_day_none_when_zero_or_no_data():
+    assert plan_day(0, SUNRISE, SUNSET) is None
+    assert plan_day(1, None, SUNSET) is None
+    assert plan_day(1, SUNRISE, None) is None

@@ -1,11 +1,28 @@
 import { fmtHours, fmtTime } from '../format';
-import type { LightSummary } from '../types';
+import type { LightSummary, PlannedInterval } from '../types';
 import { Icon } from './icons';
+
+/** Склеить соседние интервалы (конец одной = начало другой): день и вечер идут слитно */
+function mergeIntervals(planned: PlannedInterval[]): PlannedInterval[] {
+  const sorted = [...planned].sort((a, b) => a.start.localeCompare(b.start));
+  const out: PlannedInterval[] = [];
+  for (const p of sorted) {
+    const last = out[out.length - 1];
+    if (last && last.end !== null && p.start <= last.end) {
+      out[out.length - 1] = { start: last.start, end: p.end ?? last.end };
+    } else {
+      out.push(p);
+    }
+  }
+  return out;
+}
 
 /** Строка под плитками: сколько света не хватает до нормы и когда включить лампу (или когда она досветит сама) */
 export function LightHint({ light }: { light: LightSummary }) {
   const auto = light.lamp?.mode === 'auto' ? light.lamp : null;
-  const plan = auto?.planned.map((p) => `${fmtTime(p.start)}–${p.end ? fmtTime(p.end) : '…'}`).join(' и ');
+  const plan = auto?.planned
+    ? mergeIntervals(auto.planned).map((p) => `${fmtTime(p.start)}–${p.end ? fmtTime(p.end) : '…'}`).join(' и ')
+    : undefined;
   let text: string;
   if (light.deficit_hours <= 0) {
     text = `Света хватает: ${fmtHours(light.total_hours)} ч при норме ${fmtHours(light.target_hours)}`;

@@ -268,6 +268,16 @@ def plan_evening(
     return (sunset, end) if end > sunset else None
 
 
+def plan_day(
+    remaining: float, sunrise: datetime | None, sunset: datetime | None
+) -> tuple[datetime, datetime] | None:
+    """Дневная досветка: вплотную перед закатом, чтобы сливаться с вечерним остатком."""
+    if remaining <= 0 or sunrise is None or sunset is None:
+        return None
+    start = max(sunset - timedelta(hours=remaining), sunrise)
+    return (start, sunset) if start < sunset else None
+
+
 # ---------- пересадка ----------
 def add_months(d: date, months: int) -> date:
     m = d.month - 1 + months

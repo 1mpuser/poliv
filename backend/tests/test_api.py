@@ -370,8 +370,9 @@ def test_auto_lamp_plans_and_drives_plug(client, admin, monkeypatch):
         calls.clear()  # при создании лампы розетке уже ушло «выкл»
 
         lamps.tick(db, now=at(5))
-        # лимону не хватает 10 ч: утро — половина, но не раньше 06:00 (3 ч); вечер — остаток 7 ч, но до 23:00
-        assert planned(db) == [(at(6), at(9)), (at(16, 30), at(23))]
+        # лимону не хватает 10 ч: утро — половина, но не раньше 06:00 (3 ч); вечер — остаток 7 ч, но до 23:00;
+        # день — оставшиеся после них 0,5 ч вплотную перед закатом
+        assert planned(db) == [(at(6), at(9)), (at(16), at(16, 30)), (at(16, 30), at(23))]
         assert calls == []  # розетка уже выключена
 
         lamps.tick(db, now=at(6, 30))
@@ -383,7 +384,9 @@ def test_auto_lamp_plans_and_drives_plug(client, admin, monkeypatch):
         lamps.toggle(db, db.get(Lamp, lamp_id), at(6, 40))
         assert calls[-1] == ("dev-1", False)
         lamps.tick(db, now=at(6, 41))
-        assert calls[-1] == ("dev-1", False) and len(planned(db)) == 2
+        assert calls[-1] == ("dev-1", False) and len(planned(db)) == 3
+        # дневная часть пересчитана с учётом того, что утро недосветило: начинается раньше 16:00
+        assert planned(db)[1][1] == at(16, 30) and planned(db)[1][0] < at(16)
 
         # Смена режима во время вечерней досветки: идущая гаснет, розетке «выкл»
         lamps.tick(db, now=at(17))
@@ -391,6 +394,55 @@ def test_auto_lamp_plans_and_drives_plug(client, admin, monkeypatch):
         lamps.update(db, db.get(Lamp, lamp_id), {"mode": LampMode.manual}, None, at(17, 5))
         assert planned(db)[-1] == (at(16, 30), at(17, 5))
         assert calls[-1] == ("dev-1", False)
+
+
+def test_auto_lamp_plans_daytime_part(client, admin, monkeypatch):
+    from datetime import date, datetime
+
+    from sqlalchemy import select
+
+    from app.config import settings
+    from app.db import SessionLocal
+    from app.models import DaylightDay, LampSession, LampSource
+    from app.services import lamps, light, yandex
+
+    tz = settings.zone
+    day = date(2030, 1, 20)
+
+    def at(h, m=0):
+        return datetime(2030, 1, 20, h, m, tzinfo=tz)
+
+    calls = []
+    monkeypatch.setattr(light, "fetch_days", lambda lat, lon: [])
+    monkeypatch.setattr(yandex, "list_devices", lambda token: [])
+    monkeypatch.setattr(yandex, "set_on", lambda token, dev, on: calls.append((dev, on)))
+
+    uid, t = make_user(client, admin, "day@example.com")
+    lemon = client.post("/api/plants", json={"name": "Лимон", "light_target_hours": 12}, headers=auth(t)).json()
+    client.patch("/api/settings", json={"location_name": "Москва", "latitude": 55.75, "longitude": 37.62}, headers=auth(t))
+    client.put("/api/settings/yandex-token", json={"token": "y0_test-token-123"}, headers=auth(t))
+    # лампу создали днём в пасмурный день
+    lamp = client.post(
+        "/api/lamps",
+        json={"name": "Дневная", "mode": "auto", "device_id": "dev-2", "device_name": "Розетка",
+              "plant_ids": [lemon["id"]]},
+        headers=auth(t),
+    ).json()
+    lamp_id = lamp["id"]
+
+    def planned(db):
+        q = select(LampSession).where(LampSession.lamp_id == lamp_id, LampSession.source == LampSource.auto).order_by(LampSession.started_at)
+        return [(s.started_at, s.ended_at) for s in db.scalars(q)]
+
+    with SessionLocal() as db:
+        db.merge(DaylightDay(user_id=uid, day=day, sunrise=at(9), sunset=at(16, 30), daylight_hours=7.5, sunshine_hours=2.0))
+        db.commit()
+        calls.clear()  # при создании лампы розетке уже ушло «выкл»
+
+        # на первом шаге днём появляется дневная часть с текущей минуты, розетке — «вкл»
+        lamps.tick(db, now=at(14))
+        assert planned(db) == [(at(14), at(16, 30)), (at(16, 30), at(23))]
+        assert calls == [("dev-2", True)]
 
 
 def test_plug_errors_and_archive(client, admin, monkeypatch):
