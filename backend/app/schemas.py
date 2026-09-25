@@ -3,7 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models import FeedMethod, Season
+from app.models import FeedMethod, LampMode, LampSource, Season
 
 Status = Literal["ok", "soon", "late", "off"]
 
@@ -117,7 +117,7 @@ class FeedingOut(ORM):
 
 
 class LampSessionCreate(BaseModel):
-    plant_id: int | None = None
+    lamp_id: int
     started_at: datetime | None = None
     ended_at: datetime | None = None
     planned_hours_per_day: float | None = Field(None, ge=0, le=24)
@@ -131,14 +131,15 @@ class LampSessionUpdate(BaseModel):
 
 class LampSessionOut(ORM):
     id: int
-    plant_id: int | None
+    lamp_id: int
+    source: LampSource
     started_at: datetime
     ended_at: datetime | None
     planned_hours_per_day: float
 
 
 class LampToggle(BaseModel):
-    plant_id: int | None = None
+    plant_id: int
 
 
 class LampToggleOut(BaseModel):
@@ -146,6 +147,8 @@ class LampToggleOut(BaseModel):
     session: LampSessionOut
     # Для отмены выключения: вернуть ended_at к этому значению (null — горела вручную)
     previous_ended_at: datetime | None = None
+    # Сессия записана, но розетка не ответила — текст для тоста
+    plug_error: str | None = None
 
 
 class ScheduleInterval(BaseModel):
@@ -153,16 +156,77 @@ class ScheduleInterval(BaseModel):
     end_time: time
 
 
-class LampScheduleOut(ORM, ScheduleInterval):
-    id: int
-    plant_id: int | None
-
-
 class LampScheduleSet(BaseModel):
-    """Полная замена расписания одной лампы: plant_id null — общая лампа."""
+    """Полная замена расписания лампы; пустой список — расписания нет."""
 
-    plant_id: int | None = None
     intervals: list[ScheduleInterval] = Field(default_factory=list, max_length=8)
+
+
+# ---------- Лампы ----------
+class LampFields(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    mode: LampMode = LampMode.manual
+    device_id: str | None = Field(None, max_length=100)
+    device_name: str | None = Field(None, max_length=200)
+    morning_not_before: time = time(6)
+    evening_not_after: time = time(23)
+
+
+class LampCreate(LampFields):
+    plant_ids: list[int] = Field(default_factory=list, max_length=100)
+
+
+class LampUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=100)
+    mode: LampMode | None = None
+    device_id: str | None = Field(None, max_length=100)
+    device_name: str | None = Field(None, max_length=200)
+    morning_not_before: time | None = None
+    evening_not_after: time | None = None
+    plant_ids: list[int] | None = Field(None, max_length=100)
+
+
+class PlannedInterval(BaseModel):
+    start: datetime
+    end: datetime | None
+
+
+class LampOut(LampFields):
+    id: int
+    last_state: bool | None
+    last_error: str | None
+    last_error_at: datetime | None
+    plant_ids: list[int]
+    is_on: bool
+    schedule: list[ScheduleInterval]
+    planned: list[PlannedInterval]  # досветка на сегодня (режим auto)
+
+
+class LampBrief(BaseModel):
+    """Лампа растения в сводке."""
+
+    id: int
+    name: str
+    mode: LampMode
+    is_on: bool
+    has_device: bool
+    planned: list[PlannedInterval]
+    last_error: str | None
+
+
+class PlantLampSet(BaseModel):
+    lamp_id: int | None
+
+
+class YandexTokenSet(BaseModel):
+    token: str | None = Field(None, min_length=10, max_length=2000)
+
+
+class YandexDevice(BaseModel):
+    id: str
+    name: str
+    room: str | None
+    type: str
 
 
 class RepottingCreate(BaseModel):
@@ -196,6 +260,7 @@ class SettingsOut(ORM):
     location_name: str | None
     latitude: float | None
     longitude: float | None
+    yandex_status: Literal["none", "ok", "invalid"]
 
 
 class SettingsUpdate(BaseModel):
@@ -249,7 +314,6 @@ class LampSummary(BaseModel):
     status: Status
     is_on: bool
     open_session_id: int | None
-    shared_is_on: bool
 
 
 class LightSummary(BaseModel):
@@ -268,8 +332,7 @@ class LightSummary(BaseModel):
     suggestion_start: datetime | None  # когда добрать недостающее
     suggestion_end: datetime | None
     suggestion_until_midnight: bool  # даже до полуночи не хватит
-    schedule: list[ScheduleInterval]  # своя лампа
-    shared_schedule: list[ScheduleInterval]  # общая лампа
+    lamp: LampBrief | None  # лампа растения сейчас
 
 
 class RepotSummary(BaseModel):
@@ -305,7 +368,7 @@ class HistoryEvent(BaseModel):
     # lamp
     ended_at: datetime | None = None
     hours: float | None = None
-    shared: bool | None = None
+    lamp_name: str | None = None
     # repot
     pot_size_before: float | None = None
     pot_size_after: float | None = None

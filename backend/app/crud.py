@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db import Base
-from app.models import FertilizerType, LampSession, Plant, User
+from app.models import FertilizerType, Lamp, LampSession, Plant, User
 
 M = TypeVar("M", bound=Base)
 
@@ -58,8 +58,16 @@ def owned_log(db: Session, user: User, model: type[M], log_id: int) -> M:
     return obj
 
 
-def owned_lamp(db: Session, user: User, session_id: int) -> LampSession:
+def owned_lamp_session(db: Session, user: User, session_id: int) -> LampSession:
     obj = db.get(LampSession, session_id)
     if obj is None or obj.user_id != user.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Сессия лампы не найдена")
+    return obj
+
+
+def owned_lamp(db: Session, user: User, lamp_id: int) -> Lamp:
+    """Архивная («удалённая») лампа тоже 404."""
+    obj = db.get(Lamp, lamp_id)
+    if obj is None or obj.user_id != user.id or obj.archived_at is not None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Лампа не найдена")
     return obj

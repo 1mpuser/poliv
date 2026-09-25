@@ -1,20 +1,18 @@
-"""Свет: световой день из Open-Meteo и сессии лампы по расписанию программируемой розетки.
-
-Open-Meteo бесплатный и без ключа. sunshine_duration — часы прямого солнца с учётом облачности,
-daylight_duration — от восхода до заката. Норма света считается по солнечным часам.
-"""
+"""Свет: световой день из Open-Meteo и сессии лампы по расписанию."""
 
 import json
 import logging
 import urllib.parse
 import urllib.request
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
+from fastapi import HTTPException, status
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from app import schemas
 from app.config import settings
-from app.models import DaylightDay, LampSchedule, LampSession, Plant, User, UserSettings
+from app.models import DaylightDay, Lamp, LampMode, LampSchedule, LampSession, LampSource, User, UserSettings
 from app.services import summary as rules
 
 log = logging.getLogger("poliv.light")
@@ -105,26 +103,34 @@ def sunshine_by_day(db: Session, user_id: int, since: date) -> dict[date, float]
 
 
 # ---------- расписание → сессии ----------
-def _lamp_cond(model, plant_id: int | None):
-    return model.plant_id.is_(None) if plant_id is None else model.plant_id == plant_id
-
-
-def schedules_for(db: Session, user_id: int, plant_id: int | None) -> list[LampSchedule]:
+def schedules_for(db: Session, lamp_id: int) -> list[LampSchedule]:
     return list(
-        db.scalars(
-            select(LampSchedule)
-            .where(LampSchedule.user_id == user_id, _lamp_cond(LampSchedule, plant_id))
-            .order_by(LampSchedule.start_time)
-        )
+        db.scalars(select(LampSchedule).where(LampSchedule.lamp_id == lamp_id).order_by(LampSchedule.start_time))
     )
 
 
+def validate_intervals(intervals: list[schemas.ScheduleInterval]) -> list[tuple[time, time]]:
+    out = sorted((i.start_time, i.end_time) for i in intervals)
+    for s, e in out:
+        if e <= s:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Конец интервала должен быть позже начала (через полночь — двумя интервалами)")
+    for (_, e1), (s2, _) in zip(out, out[1:]):
+        if s2 < e1:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Интервалы пересекаются")
+    return out
+
+
 def ensure_schedule_sessions(db: Session, user_id: int, day: date) -> int:
-    """Создать на день сессии по всем расписаниям учётки (идемпотентно). Возвращает, сколько создано."""
+    """Создать на день сессии по расписаниям ламп в режиме «по расписанию» (идемпотентно)."""
     tz = settings.zone
     start, end = rules.local_midnight(day, tz), rules.local_midnight(day + timedelta(days=1), tz)
     created = 0
-    for sch in db.scalars(select(LampSchedule).where(LampSchedule.user_id == user_id)):
+    q = (
+        select(LampSchedule)
+        .join(Lamp, Lamp.id == LampSchedule.lamp_id)
+        .where(LampSchedule.user_id == user_id, Lamp.mode == LampMode.schedule, Lamp.archived_at.is_(None))
+    )
+    for sch in db.scalars(q):
         exists = db.scalar(
             select(LampSession.id).where(
                 LampSession.schedule_id == sch.id, LampSession.started_at >= start, LampSession.started_at < end
@@ -133,15 +139,10 @@ def ensure_schedule_sessions(db: Session, user_id: int, day: date) -> int:
         if exists:
             continue
         (s, e), = rules.schedule_sessions_for_day([(sch.start_time, sch.end_time)], day, tz)
-        plant = db.get(Plant, sch.plant_id) if sch.plant_id else None
         db.add(
             LampSession(
-                user_id=user_id,
-                plant_id=sch.plant_id,
-                schedule_id=sch.id,
-                started_at=s,
-                ended_at=e,
-                planned_hours_per_day=plant.light_target_hours if plant else 12,
+                user_id=user_id, lamp_id=sch.lamp_id, schedule_id=sch.id,
+                source=LampSource.schedule, started_at=s, ended_at=e,
             )
         )
         created += 1
@@ -150,13 +151,13 @@ def ensure_schedule_sessions(db: Session, user_id: int, day: date) -> int:
 
 
 def replace_schedule(
-    db: Session, user_id: int, plant_id: int | None, intervals: list[tuple]
+    db: Session, user_id: int, lamp_id: int, intervals: list[tuple[time, time]]
 ) -> list[LampSchedule]:
     """Новое расписание лампы. Сегодняшние сессии по старому расписанию пересоздаются,
     прошлые дни не трогаются (история остаётся как была)."""
     tz = settings.zone
     today = datetime.now(tz).date()
-    old_ids = [s.id for s in schedules_for(db, user_id, plant_id)]
+    old_ids = [s.id for s in schedules_for(db, lamp_id)]
     if old_ids:
         db.execute(
             delete(LampSession).where(
@@ -166,19 +167,17 @@ def replace_schedule(
         )
         db.execute(delete(LampSchedule).where(LampSchedule.id.in_(old_ids)))
     for s, e in intervals:
-        db.add(LampSchedule(user_id=user_id, plant_id=plant_id, start_time=s, end_time=e))
+        db.add(LampSchedule(user_id=user_id, lamp_id=lamp_id, start_time=s, end_time=e))
     db.commit()
     ensure_schedule_sessions(db, user_id, today)
-    return schedules_for(db, user_id, plant_id)
+    return schedules_for(db, lamp_id)
 
 
 # ---------- фоновая синхронизация ----------
 def sync_all(db: Session) -> None:
-    """Раз в полчаса: свет по городу и сессии по расписаниям на сегодня — для всех учёток."""
-    today = datetime.now(settings.zone).date()
+    """Раз в полчаса: свет по городу для всех учёток. Сессии по расписаниям — в шаге ламп (lamps.tick)."""
     for user in db.scalars(select(User).where(User.blocked_at.is_(None))):
         try:
-            ensure_schedule_sessions(db, user.id, today)
             row = db.get(UserSettings, user.id)
             if row is not None:
                 sync_daylight(db, row)
