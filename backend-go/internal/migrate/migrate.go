@@ -51,6 +51,9 @@ func (m *Migrator) Up(ctx context.Context) error {
 			if err := m.record(ctx, "0001_baseline"); err != nil {
 				return err
 			}
+			// applied снимали до этой отметки — догоняем, иначе цикл ниже
+			// применит baseline повторно и упрётся в «type already exists»
+			applied["0001_baseline"] = true
 		}
 	}
 
