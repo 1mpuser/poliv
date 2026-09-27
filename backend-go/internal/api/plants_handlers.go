@@ -236,8 +236,14 @@ func (s *Server) plantHistory(w http.ResponseWriter, r *http.Request, user *mode
 		writeDetail(w, http.StatusNotFound, "Растение не найдено")
 		return
 	}
+	validTypes := map[string]bool{"water": true, "check": true, "feed": true, "lamp": true, "repot": true}
 	types := map[string]bool{}
 	for _, t := range r.URL.Query()["types"] {
+		// как Python-референс: неизвестный тип события — 422, а не молчаливо пустой ответ
+		if !validTypes[t] {
+			writeValidation(w, []any{"неверный тип события"})
+			return
+		}
 		types[t] = true
 	}
 	if len(types) == 0 {
