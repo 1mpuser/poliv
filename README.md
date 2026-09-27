@@ -10,7 +10,7 @@ Self-hosted трекер ухода за комнатными растениям
 | Сервис | Что внутри |
 |---|---|
 | `db` | PostgreSQL 16, данные в volume `pgdata` |
-| `backend` | FastAPI + SQLAlchemy 2 + Alembic (миграции применяются при старте) |
+| `backend` | Go, один статический бинарник (миграции SQL применяются при старте) |
 | `poliv-web` | React 19 + Vite + TypeScript, собирается в статику и отдаётся nginx; он же проксирует `/api` |
 | `caddy` | Реверс-прокси с HTTPS → `poliv-web` |
 
@@ -23,11 +23,11 @@ docker compose up -d --build
 docker compose ps          # у всех четырёх сервисов должен быть статус (healthy)
 
 # первый админ: пароль сгенерируется и напечатается один раз
-docker compose exec backend python -m app.cli set-owner --email you@example.com
+docker compose exec backend /poliv set-owner --email you@example.com
 ```
 
 - Приложение: https://localhost — вход по почте и паролю
-- Swagger: https://localhost/api/docs (кнопка **Authorize** принимает почту и пароль)
+- API (пути и тела) — `docs/api.md`; `/api/health` и `/api/auth/token` открыты без токена
 
 ## Учётки
 
@@ -42,10 +42,10 @@ docker compose exec backend python -m app.cli set-owner --email you@example.com
 Команды на сервере (пароль генерируется, если не задан `--password`):
 
 ```bash
-docker compose exec backend python -m app.cli set-owner --email you@example.com   # владелец-админ
-docker compose exec backend python -m app.cli create-user --email friend@example.com [--admin]
-docker compose exec backend python -m app.cli reset-password --email you@example.com  # если забыли
-docker compose exec backend python -m app.cli make-admin --email friend@example.com
+docker compose exec backend /poliv set-owner --email you@example.com   # владелец-админ
+docker compose exec backend /poliv create-user --email friend@example.com [--admin]
+docker compose exec backend /poliv reset-password --email you@example.com  # если забыли
+docker compose exec backend /poliv make-admin --email friend@example.com
 ```
 
 Сертификат выпускает локальный CA Caddy (`TLS=internal`), поэтому браузер покажет предупреждение,
@@ -140,17 +140,17 @@ docker compose start db
 .
 ├── docker-compose.yml, Caddyfile, .env.example
 ├── design/                  исходный статичный макет (HTML/CSS)
-├── backend/
-│   ├── alembic/versions/    миграции (0001 — схема + стартовые данные)
-│   ├── app/
-│   │   ├── main.py          FastAPI, /api, Swagger
-│   │   ├── auth.py          JWT, вход по почте, текущая учётка
-│   │   ├── cli.py           set-owner, create-user, reset-password, make-admin
-│   │   ├── models.py        SQLAlchemy-модели
-│   │   ├── schemas.py       Pydantic-схемы
-│   │   ├── routers/         plants, fertilizers, logs, lamp, settings, admin
-│   │   └── services/        summary.py — правила, plants.py — сборка из БД
-│   └── tests/
+├── backend-go/
+│   ├── main.go, cli.go      сервер, фон. задачи, CLI (set-owner/…), healthcheck
+│   ├── Dockerfile           multi-stage → статический бинарник (distroless, nonroot)
+│   ├── internal/
+│   │   ├── api/             HTTP-роутеры (тот же контракт, что FastAPI)
+│   │   ├── summary/         чистые правила статусов
+│   │   ├── plants/, lamps/, light/, yandex/, users/   сервисы
+│   │   ├── migrate/sql/     SQL-миграции (0001_baseline = Alembic head)
+│   │   ├── passwords/, secretbox/, auth/  scrypt, Fernet, JWT
+│   │   └── schema/, render/ DTO и форматы Pydantic (float 12.0, ISO +03:00)
+│   └── *_test.go            юнит + интеграция на Postgres
 └── frontend/
     └── src/
         ├── api.ts, types.ts, format.ts
@@ -162,16 +162,19 @@ docker compose start db
 
 ```bash
 # юнит-тесты (правила, пароли)
-cd backend && uv run --python 3.12 --with-requirements requirements-dev.txt pytest
+cd backend-go && go vet ./... && go test ./...
 
-# все тесты, включая API на реальном Postgres (база poliv_test пересоздаётся)
+# API-тесты на реальном Postgres (база poliv_test пересоздаётся; в golang-контейнере в сети стека)
 docker compose exec db sh -c 'createdb -U "$POSTGRES_USER" poliv_test' 2>/dev/null
-docker compose run --rm --no-deps -u root -v "$PWD/backend:/app" backend sh -c \
-  'export TEST_DATABASE_URL="${DATABASE_URL%/*}/poliv_test"; pip install -q pytest httpx && python -m pytest -q'
+POSTGRES_USER=$(grep '^POSTGRES_USER=' .env | cut -d= -f2); POSTGRES_PASSWORD=$(grep '^POSTGRES_PASSWORD=' .env | cut -d= -f2)
+NETWORK=$(docker inspect poliv-backend-1 --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')
+docker run --rm --network "$NETWORK" -v "$PWD/backend-go:/src" -w /src \
+  -e TEST_DATABASE_URL="postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@db:5432/poliv_test" \
+  -e JWT_SECRET=test-secret -e TZ=Europe/Moscow \
+  golang:1.24-alpine sh -c 'go test ./internal/api/'
 
 # фронтенд с hot reload поверх запущенного стека (прокси /api → https://localhost)
 cd frontend && npm install && npm run dev
 
-# новая миграция после изменения models.py
-docker compose exec backend alembic revision --autogenerate -m "описание"
+# новая миграция — новый SQL-файл в backend-go/internal/migrate/sql/ + прогон API-тестов
 ```

@@ -10,7 +10,7 @@
 
 ```bash
 ssh root@213.108.23.47 'cd /opt/poliv && docker compose -f docker-compose.yml -f docker-compose.server.yml \
-  exec -T backend python -m app.cli set-owner --email alex022003@mail.ru'
+  exec -T backend /poliv set-owner --email alex022003@mail.ru'
 ```
 
 Пароль печатается **один раз** — сохранить. Из сессии Claude запускать через `! …`: классификатор
@@ -36,10 +36,10 @@ Claude Code не даёт агенту читать пароли, вывод д�
 
 | Команда | Что делает |
 |---|---|
-| `python -m app.cli set-owner --email X` | Заглушке владельца (или существующей учётке X) — почта X, новый пароль, админ, разблокировка |
-| `python -m app.cli create-user --email X [--admin]` | Новая учётка |
-| `python -m app.cli reset-password --email X` | Новый пароль (если админ забыл свой) |
-| `python -m app.cli make-admin --email X` | Сделать админом (через интерфейс назначить нельзя) |
+| `/poliv set-owner --email X` | Заглушке владельца (или существующей учётке X) — почта X, новый пароль, админ, разблокировка |
+| `/poliv create-user --email X [--admin]` | Новая учётка |
+| `/poliv reset-password --email X` | Новый пароль (если админ забыл свой) |
+| `/poliv make-admin --email X` | Сделать админом (через интерфейс назначить нельзя) |
 
 Пароль генерируется, если не передан `--password`. Локально — то же без `-f … server.yml`.
 

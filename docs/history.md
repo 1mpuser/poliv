@@ -65,3 +65,19 @@
   В `index.html` — название «Поливалка — трекер полива растений», `meta description` и статический текст о сервисе
   внутри `#root` (виден роботам без JS, React его заменяет). На экране входа — заголовок «Поливалка» и строка о том,
   что это закрытый трекер растений.
+
+### 2026-09-27 — бэкенд переписан на Go
+- Python (FastAPI + SQLAlchemy + Alembic) заменён на один статический бинарник Go (`backend-go/`):
+  `net/http`-роутинг, `pgx/v5`, `golang-jwt`, `golang.org/x/crypto` (scrypt, hkdf). API один в один —
+  пути, коды, JSON-поля и форматы Pydantic (float `12.0`, ISO-даты `+03:00`, пустые списки `[]`).
+- Совместимость с данными подтверждена: старые scrypt-хэши, JWT от PyJWT и Fernet-токен Яндекса
+  читаются новым кодом (и обратно). На копии рабочей базы Go стартует без изменения схемы
+  (`alembic_version` не трогается), все GET-эндпоинты (`/plants`, сводки, история, статистика,
+  лампы, настройки, свет) дают тот же JSON, что Python.
+- Схема БД на пустой базе поднимается базовой SQL-миграцией (эквивалент Alembic 0001–0005):
+  частичные индексы `uq_plant_lamp_open`/`uq_lamp_one_open`, `ON DELETE SET NULL` у подкормок.
+  Будущие миграции — простые SQL-файлы (раннер `pg_migrations`).
+- Docker: multi-stage, итоговый образ distroless (nonroot), healthcheck — подкоманда `/poliv healthcheck`;
+  сервис по-прежнему `backend` с алиасом `poliv-api`, порт 8000, те же env (принимает и префикс `+psycopg`).
+- CLI в том же бинарнике: `set-owner` / `create-user` / `reset-password` / `make-admin`.
+- Память (docker stats, простои): Python ~74 MiB → Go ~6 MiB (после прогона запросов ~9 MiB).

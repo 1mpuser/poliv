@@ -68,9 +68,9 @@ bash deploy/deploy-server.sh  # только деплой текущего HEAD
 # код: задеплоить предыдущий коммит
 git checkout <коммит> && bash deploy/deploy-server.sh && git checkout master
 
-# если откатываемая версия меняла схему — сначала откатить миграцию на сервере
-ssh root@213.108.23.47 'cd /opt/poliv && docker compose -f docker-compose.yml -f docker-compose.server.yml \
-  exec -T backend alembic downgrade -1'
+# если откатываемая версия меняла схему — миграции Go применяются при старте;
+# при необходимости откатить базу до бэкапа: pg_restore predeploy-*.dump
+ssh root@213.108.23.47 'cd /opt/poliv && ls -1t /var/backups/poliv/db/predeploy-*.dump | head -1'
 ```
 
 Убрать поливалку из Caddy трекера: удалить строки между `# poliv:begin` и `# poliv:end` в

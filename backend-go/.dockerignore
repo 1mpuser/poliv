@@ -1,0 +1,5 @@
+.git
+*.test
+/poliv
+coverage.out
+docs

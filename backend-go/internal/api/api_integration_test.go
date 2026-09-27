@@ -73,6 +73,13 @@ func TestMain(m *testing.M) {
 
 // ---------- helpers ----------
 
+func requireDB(t *testing.T) {
+	t.Helper()
+	if os.Getenv("TEST_DATABASE_URL") == "" {
+		t.Skip("TEST_DATABASE_URL не задан")
+	}
+}
+
 func req(t *testing.T, method, path string, body any, token string) *http.Response {
 	t.Helper()
 	var rd io.Reader
@@ -162,6 +169,7 @@ func getJSON(t *testing.T, path, token string, out any) int {
 // ---------- тесты ----------
 
 func TestOwnerKeepsSeedData(t *testing.T) {
+	requireDB(t)
 	admin := adminToken(t)
 	var plants []map[string]any
 	if status := getJSON(t, "/api/plants", admin, &plants); status != 200 {
@@ -178,6 +186,7 @@ func TestOwnerKeepsSeedData(t *testing.T) {
 }
 
 func TestPlaceholderOwnerCannotLogin(t *testing.T) {
+	requireDB(t)
 	resp, err := http.Post(testBase+"/api/auth/token", "application/x-www-form-urlencoded",
 		strings.NewReader("username=owner@localhost.invalid&password=!"))
 	if err != nil {
@@ -190,6 +199,7 @@ func TestPlaceholderOwnerCannotLogin(t *testing.T) {
 }
 
 func TestNewUserStartsEmptyWithDefaults(t *testing.T) {
+	requireDB(t)
 	admin := adminToken(t)
 	_, tok := makeUser(t, admin, "fresh@example.com", "user-pass-1")
 	var plants []map[string]any
@@ -210,6 +220,7 @@ func TestNewUserStartsEmptyWithDefaults(t *testing.T) {
 }
 
 func TestDataIsolation(t *testing.T) {
+	requireDB(t)
 	admin := adminToken(t)
 	_, a := makeUser(t, admin, "a@example.com", "user-pass-1")
 	_, b := makeUser(t, admin, "b@example.com", "user-pass-1")
@@ -308,6 +319,7 @@ func TestDataIsolation(t *testing.T) {
 }
 
 func TestAdminEndpointsHiddenFromUsers(t *testing.T) {
+	requireDB(t)
 	admin := adminToken(t)
 	_, tok := makeUser(t, admin, "plain@example.com", "user-pass-1")
 	resp := req(t, "GET", "/api/admin/users", nil, tok)
@@ -323,6 +335,7 @@ func TestAdminEndpointsHiddenFromUsers(t *testing.T) {
 }
 
 func TestAdminCreateValidation(t *testing.T) {
+	requireDB(t)
 	admin := adminToken(t)
 	resp := req(t, "POST", "/api/admin/users", map[string]any{"email": "A@EXAMPLE.com", "password": "12345678"}, admin)
 	if resp.StatusCode != 409 {
@@ -342,6 +355,7 @@ func TestAdminCreateValidation(t *testing.T) {
 }
 
 func TestBlockUnblockRevokesTokens(t *testing.T) {
+	requireDB(t)
 	admin := adminToken(t)
 	uid, tok := makeUser(t, admin, "blocked@example.com", "user-pass-1")
 	resp := req(t, "POST", fmt.Sprintf("/api/admin/users/%d/block", uid), nil, admin)
@@ -368,6 +382,7 @@ func TestBlockUnblockRevokesTokens(t *testing.T) {
 }
 
 func TestAdminPasswordResetRevokesTokens(t *testing.T) {
+	requireDB(t)
 	admin := adminToken(t)
 	uid, tok := makeUser(t, admin, "reset@example.com", "user-pass-1")
 	resp := req(t, "POST", fmt.Sprintf("/api/admin/users/%d/password", uid), map[string]any{"password": "new-pass-22"}, admin)
@@ -393,6 +408,7 @@ func TestAdminPasswordResetRevokesTokens(t *testing.T) {
 }
 
 func TestAdminCannotBlockOrDeleteSelf(t *testing.T) {
+	requireDB(t)
 	admin := adminToken(t)
 	var me map[string]any
 	getJSON(t, "/api/auth/me", admin, &me)
@@ -410,6 +426,7 @@ func TestAdminCannotBlockOrDeleteSelf(t *testing.T) {
 }
 
 func TestDeleteUserRemovesData(t *testing.T) {
+	requireDB(t)
 	admin := adminToken(t)
 	uid, tok := makeUser(t, admin, "gone@example.com", "user-pass-1")
 	var plant map[string]any
@@ -439,6 +456,7 @@ func TestDeleteUserRemovesData(t *testing.T) {
 }
 
 func TestChangeOwnPassword(t *testing.T) {
+	requireDB(t)
 	admin := adminToken(t)
 	_, tok := makeUser(t, admin, "self@example.com", "user-pass-1")
 	resp := req(t, "POST", "/api/auth/password", map[string]any{"current_password": "wrong", "new_password": "brand-new-1"}, tok)
@@ -469,6 +487,7 @@ func TestChangeOwnPassword(t *testing.T) {
 // ---------- свет и лампы ----------
 
 func TestSoilCheckCRUDAndStatusReset(t *testing.T) {
+	requireDB(t)
 	admin := adminToken(t)
 	_, tok := makeUser(t, admin, "check@example.com", "user-pass-1")
 	var plant map[string]any
@@ -521,6 +540,7 @@ func TestSoilCheckCRUDAndStatusReset(t *testing.T) {
 }
 
 func TestSoilCheckForeign404(t *testing.T) {
+	requireDB(t)
 	admin := adminToken(t)
 	_, a := makeUser(t, admin, "ca@example.com", "user-pass-1")
 	_, b := makeUser(t, admin, "cb@example.com", "user-pass-1")
@@ -572,6 +592,7 @@ func windowAroundNow(t *testing.T) (string, string) {
 }
 
 func TestScheduleLampLightsItsPlantsAndToggleEndsIt(t *testing.T) {
+	requireDB(t)
 	admin := adminToken(t)
 	_, tok := makeUser(t, admin, "lamp@example.com", "user-pass-1")
 	var lemon map[string]any
@@ -667,6 +688,7 @@ func TestScheduleLampLightsItsPlantsAndToggleEndsIt(t *testing.T) {
 }
 
 func TestLampValidation(t *testing.T) {
+	requireDB(t)
 	admin := adminToken(t)
 	_, tok := makeUser(t, admin, "sched@example.com", "user-pass-1")
 	var lamp map[string]any
@@ -700,6 +722,7 @@ func TestLampValidation(t *testing.T) {
 }
 
 func TestPlantWithoutLampCannotToggle(t *testing.T) {
+	requireDB(t)
 	admin := adminToken(t)
 	_, tok := makeUser(t, admin, "nolamp@example.com", "user-pass-1")
 	var plant map[string]any
@@ -724,6 +747,7 @@ func TestPlantWithoutLampCannotToggle(t *testing.T) {
 }
 
 func TestPauseOffLampIs409(t *testing.T) {
+	requireDB(t)
 	admin := adminToken(t)
 	_, tok := makeUser(t, admin, "pauseoff@example.com", "user-pass-1")
 	var plant map[string]any
@@ -789,6 +813,7 @@ func autoSessions(t *testing.T, lampID int) [][3]any {
 }
 
 func TestAutoLampPlansAndDrivesPlug(t *testing.T) {
+	requireDB(t)
 	day := time.Date(2030, 1, 15, 0, 0, 0, 0, zoneLoc)
 	_, lampID, _, at := autoLampSetup(t, day)
 
@@ -866,6 +891,7 @@ func TestAutoLampPlansAndDrivesPlug(t *testing.T) {
 }
 
 func TestLocationFetchesDaylight(t *testing.T) {
+	requireDB(t)
 	admin := adminToken(t)
 	_, tok := makeUser(t, admin, "sun@example.com", "user-pass-1")
 	var plant map[string]any

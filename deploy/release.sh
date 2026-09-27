@@ -22,17 +22,22 @@ branch=$(git branch --show-current)
 [ "$branch" = master ] || echo "Внимание: ветка $branch, не master."
 
 step "Юнит-тесты бэкенда"
-(cd backend && uv run --quiet --python 3.12 --with-requirements requirements-dev.txt pytest -q)
+(cd backend-go && go vet ./... && go test ./internal/summary/ ./internal/passwords/ ./internal/secretbox/ ./internal/yandex/)
 
 step "API-тесты на Postgres"
 if [ "${SKIP_API_TESTS:-0}" = 1 ]; then
   echo "пропущены (SKIP_API_TESTS=1)"
 elif [ "$(docker compose ps --format '{{.Service}} {{.Health}}' 2>/dev/null | grep -c '^db healthy')" = 1 ]; then
   docker compose exec -T db sh -c 'createdb -U "$POSTGRES_USER" poliv_test 2>/dev/null || true'
-  docker compose run --rm --no-deps -u root -v "$PWD/backend:/app" backend sh -c \
-    'export TEST_DATABASE_URL="${DATABASE_URL%/*}/poliv_test";
-     pip install -q --root-user-action=ignore pytest httpx >/dev/null 2>&1;
-     python -m pytest -q -p no:cacheprovider tests/test_api.py'
+  POSTGRES_USER=$(grep '^POSTGRES_USER=' .env | cut -d= -f2)
+  POSTGRES_PASSWORD=$(grep '^POSTGRES_PASSWORD=' .env | cut -d= -f2)
+  NETWORK=$(docker inspect poliv-backend-1 --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')
+  # Тесты на реальном Postgres: в golang-контейнере в сети стека (poliv_test пересоздаётся внутри)
+  docker run --rm --network "$NETWORK" \
+    -v "$PWD/backend-go:/src" -w /src \
+    -e TEST_DATABASE_URL="postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@db:5432/poliv_test" \
+    -e JWT_SECRET=test-secret -e TZ=Europe/Moscow \
+    golang:1.24-alpine sh -c 'go test ./internal/api/'
 else
   echo "ПРОПУЩЕНЫ: локальный стек не поднят (docker compose up -d)."
 fi

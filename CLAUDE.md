@@ -1,6 +1,6 @@
 # Поливалка — заметки для Claude
 
-Self-hosted трекер ухода за растениями: FastAPI + Postgres + React SPA за Caddy, всё в Docker Compose.
+Self-hosted трекер ухода за растениями: Go (backend-go) + Postgres + React SPA за Caddy, всё в Docker Compose.
 Документация — `docs/` (начинать с `docs/workflow.md`; решения и их причины — `docs/decisions.md`).
 Здесь — только то, что нужно при работе с кодом. Меняешь поведение или инфраструктуру — обнови `docs/`
 и допиши строку в `docs/history.md`.
@@ -12,14 +12,17 @@ docker compose up -d --build              # весь стек; миграции 
 docker compose ps                         # у всех 4 сервисов должно быть (healthy)
 docker compose logs -f backend              # сервисы: db, backend, poliv-web, caddy
 
-# юнит-тесты (Python 3.12 через uv; системный python3 — 3.9, на нём код не импортируется)
-cd backend && uv run --python 3.12 --with-requirements requirements-dev.txt pytest -q
+# юнит-тесты (Go; API-тесты без TEST_DATABASE_URL пропускаются)
+cd backend-go && go vet ./... && go test ./...
 
-# все тесты, включая tests/test_api.py на реальном Postgres (база poliv_test пересоздаётся;
-# без TEST_DATABASE_URL API-тесты пропускаются)
+# API-тесты на реальном Postgres (база poliv_test пересоздаётся; в golang-контейнере в сети стека)
 docker compose exec db sh -c 'createdb -U "$POSTGRES_USER" poliv_test' 2>/dev/null
-docker compose run --rm --no-deps -u root -v "$PWD/backend:/app" backend sh -c \
-  'export TEST_DATABASE_URL="${DATABASE_URL%/*}/poliv_test"; pip install -q pytest httpx && python -m pytest -q'
+POSTGRES_USER=$(grep '^POSTGRES_USER=' .env | cut -d= -f2); POSTGRES_PASSWORD=$(grep '^POSTGRES_PASSWORD=' .env | cut -d= -f2)
+NETWORK=$(docker inspect poliv-backend-1 --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')
+docker run --rm --network "$NETWORK" -v "$PWD/backend-go:/src" -w /src \
+  -e TEST_DATABASE_URL="postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@db:5432/poliv_test" \
+  -e JWT_SECRET=test-secret -e TZ=Europe/Moscow \
+  golang:1.24-alpine sh -c 'go test ./internal/api/'
 
 # фронтенд: typecheck + сборка (это и есть «линт» — ESLint в проекте нет)
 cd frontend && npm run build
@@ -27,19 +30,18 @@ cd frontend && npm run build
 # dev-сервер фронта с прокси /api на запущенный стек
 cd frontend && API_URL=https://polivalochka.cool:1477 npm run dev   # по умолчанию https://localhost
 
-# новая миграция после правки models.py — проверить сгенерированный файл руками
-docker compose exec backend alembic revision --autogenerate -m "..."
+# новая миграция — новый SQL-файл internal/migrate/sql/NNNN_xxx.sql + прогон API-тестов (см. docs/workflow.md)
 ```
 
 Порт backend наружу не опубликован: API трогать через Caddy (`https://$DOMAIN/api/...`)
-или `docker compose exec -T backend python -` со скриптом на urllib.
+или `docker compose exec -T backend /poliv ...` (CLI/healthcheck).
 
 ## Архитектура
 
-- **Правила статусов — только на бэкенде.** `backend/app/services/summary.py` — чистые функции без БД
-  (всё время приходит аргументами, покрыто `tests/test_summary.py`). `services/plants.py` достаёт данные
+- **Правила статусов — только на бэкенде.** `backend-go/internal/summary` — чистые функции без БД
+  (всё время приходит аргументами, покрыто `summary_test.go`). `internal/plants` достаёт данные
   из БД и собирает `PlantSummary`. Фронтенд статусы не вычисляет, только показывает поля сводки
-  (`ok | soon | late | off`). Новое правило — сначала тест в `test_summary.py`.
+  (`ok | soon | late | off`). Новое правило — сначала тест в `summary_test.go`.
 - **Проверка грунта** (`soil_checks`) — как полив для счётчика: статус полива считается от последнего
   касания = max(последний полив, последняя проверка). `water_interval_days` теперь «проверять грунт раз в N дней»;
   в сводке отдельно `days_since` (с полива), `last_check_at`/`days_since_check`. Недельная статистика считает
@@ -52,25 +54,25 @@ docker compose exec backend alembic revision --autogenerate -m "..."
 - Режимы лампы: `auto` (досветка до нормы по максимуму среди растений лампы: половина нехватки утром до рассвета,
   остаток вечером после заката; чего в вечер не влезло — дневная часть вплотную перед закатом, в пасмурный день лампа
   горит и днём), `schedule` (интервалы `lamp_schedules`), `manual`. Всё превращается в `lamp_sessions`
-  (`source`); логика часов работает только с сессиями. Логика — `services/lamps.py`, правила — `summary.py`.
-- Розетка — устройство Умного дома Яндекса (`services/yandex.py`, токен учётки зашифрован `secret_box` ключом из
-  `JWT_SECRET`). Шаг раз в минуту (`lamps.tick`, lifespan в `main.py`): сессии по расписаниям, досветка, команда
-  розетке — только при смене нужного состояния (`lamps.last_state`). Свет по городу — раз в 30 мин (`light.sync_all`).
+  (`source`); логика часов работает только с сессиями. Логика — `internal/lamps`, правила — `internal/summary`.
+- Розетка — устройство Умного дома Яндекса (`internal/yandex`, токен учётки зашифрован `internal/secretbox` ключом из
+  `JWT_SECRET`). Шаг раз в минуту (`lamps.Tick`, фоновые задачи в `main.go`): сессии по расписаниям, досветка, команда
+  розетке — только при смене нужного состояния (`lamps.last_state`). Свет по городу — раз в 30 мин (`internal/light.SyncAll`).
   **Пауза лампы** (`lamps.paused_until`): горящая сессия разрезается на `now`, хвост — `lamp_sessions.after_pause`.
-  В «Авто» `replan_auto` такие будущие сессии НЕ удаляет (считает частью уже начатого отрезка).
-  В тестах подменять `light.fetch_days`, `yandex.set_on`, `yandex.list_devices` — в сеть не ходить.
+  В «Авто» `ReplanAuto` такие будущие сессии НЕ удаляет (считает частью уже начатого отрезка).
+  В тестах подменять `light.FetchDays`, `Lamps.YandexSetOn/YandexListDevices` — в сеть не ходить.
 - Сезон и порог «скоро» (`notify_days_ahead`) — в `user_settings`, остальные настройки ухода — поля `Plant`.
 - `FeedingLog.fertilizer_type_id` — `ON DELETE SET NULL`: удаление удобрения не трогает историю.
 - **Мультиучётки, данные изолированы.** `plants`, `fertilizer_types`, `lamp_sessions` имеют `user_id`,
   журналы принадлежат учётке через растение, настройки — `user_settings` (PK = `user_id`).
-  Любой доступ по id — через `crud.owned_*`: чужая запись отвечает 404, как несуществующая.
-  Новый эндпоинт без `CurrentUser` и `owned_*` — дыра; на изоляцию есть тесты в `tests/test_api.py`.
+  Любой доступ по id — только к записям текущего пользователя: чужая запись отвечает 404, как несуществующая.
+  Новый эндпоинт без `CurrentUser` и проверки владельца — дыра; на изоляцию есть тесты в `internal/api`.
 - Вход: OAuth2 password form, `username` = почта. JWT: `sub` = id, `ver` = `users.token_version`;
   смена пароля и блокировка увеличивают версию — старые токены сразу 401.
 - Учётки выдаёт админ (`/api/admin/*`, для не-админа 404; себя заблокировать/удалить нельзя) или CLI
-  `python -m app.cli` (`set-owner`, `create-user`, `reset-password`, `make-admin`). Пароли — scrypt (`passwords.py`).
+  `/poliv` (`set-owner`, `create-user`, `reset-password`, `make-admin`). Пароли — scrypt (`internal/passwords`).
   Миграция 0002 отдала старые данные заглушке `owner@localhost.invalid` (id=1) — её «оживляет» `set-owner`.
-- PATCH-эндпоинты используют `crud.apply_update` (`exclude_unset`): явный `null` — значимое значение
+- PATCH-эндпоинты меняют только переданные поля (явный `null` — значение): явный `null` — значимое значение
   (например, `ended_at: null` снова зажигает лампу — так работает «Отменить»).
 - Город — в `user_settings`; норма света — поля `Plant`.
 

@@ -136,5 +136,5 @@ fi
 # Маркер версии: release.sh сверяет его с HEAD — иначе «успешный» деплой старого кода не заметить
 echo "$DEPLOY_REV" > "$REMOTE_DIR/REVISION"
 echo "==> Готово ($DEPLOY_REV). Первый вход (один раз): назначить владельца-админа, пароль напечатается:"
-echo "    ssh $(whoami)@<сервер> 'cd $REMOTE_DIR && docker compose exec backend python -m app.cli set-owner --email <почта>'"
+echo "    ssh $(whoami)@<сервер> 'cd $REMOTE_DIR && docker compose exec backend /poliv set-owner --email <почта>'"
 REMOTE

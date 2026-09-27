@@ -7,11 +7,10 @@ git clone git@github.com:1mpuser/poliv.git && cd poliv
 cp .env.example .env                  # POSTGRES_PASSWORD и JWT_SECRET: openssl rand -hex 32
 (cd frontend && npm ci)
 docker compose up -d --build
-docker compose exec backend python -m app.cli set-owner --email you@example.com   # пароль напечатается
+docker compose exec backend /poliv set-owner --email you@example.com   # пароль напечатается
 ```
 
-Нужны: Docker, Node 20+, [uv](https://docs.astral.sh/uv/) (он сам поставит Python 3.12),
-SSH-ключ к `root@213.108.23.47`.
+Нужны: Docker, Node 20+, Go 1.24+, SSH-ключ к `root@213.108.23.47`.
 
 Локальный домен `polivalochka.cool:1477` дополнительно требует строку в `/etc/hosts` и доверенный
 сертификат локального CA Caddy — см. [deploy.md](deploy.md#локальный-стек).
@@ -22,14 +21,14 @@ SSH-ключ к `root@213.108.23.47`.
    - Фронтенд с hot reload поверх запущенного стека:
      `cd frontend && API_URL=https://polivalochka.cool:1477 npm run dev` → http://localhost:5173
    - Бэкенд: после правки — `docker compose up -d --build backend`.
-   - Схема БД — только новой миграцией (см. ниже).
+   - Схема БД — только новой SQL-миграцией (см. ниже).
 2. **Проверяем** (`release.sh` сделает это сам, но быстрее ловить раньше):
    ```bash
-   cd backend && uv run --python 3.12 --with-requirements requirements-dev.txt pytest -q   # юнит
-   cd frontend && npm run build                                                          # типы + сборка
+   cd backend-go && go vet ./... && go test ./internal/summary/ ./internal/passwords/ ./internal/secretbox/ ./internal/yandex/
+   cd frontend && npm run build                                                             # типы + сборка
    ```
-   Новое правило статусов — сначала тест в `backend/tests/test_summary.py`.
-   Новый эндпоинт с данными учётки — тест изоляции в `backend/tests/test_api.py`.
+   Новое правило статусов — сначала тест в `backend-go/internal/summary/summary_test.go`.
+   Новый эндпоинт с данными учётки — тест изоляции в `backend-go/internal/api/api_integration_test.go`.
 3. **Коммитим** (без AI-трейлеров `Co-Authored-By`).
 4. **Выкатываем:**
    ```bash
@@ -43,34 +42,37 @@ SSH-ключ к `root@213.108.23.47`.
 
 ## Миграции БД
 
-```bash
-# после правки backend/app/models.py
-docker compose exec backend alembic revision --autogenerate -m "что меняется"
-docker compose cp backend:/app/alembic/versions/. backend/alembic/versions/
-```
+Схема лежит в `backend-go/internal/migrate/sql/*.sql` (простой раннер, версия — таблица `pg_migrations`).
+На существующей (ранее Alembic) базе миграции ничего не меняют: базовая `0001_baseline.sql`
+применяется только на пустой базе и воссоздаёт схему, идентичную Alembic head (0001–0005),
+включая частичные индексы `uq_plant_lamp_open`, `uq_lamp_one_open` и `ON DELETE SET NULL`
+у `feeding_logs.fertilizer_type_id`.
 
-Сгенерированный файл **читать руками**:
-
-- autogenerate предлагает удалить частичный индекс `uq_lamp_one_open` (его нет в моделях) — убрать из миграции;
-- переименования он видит как drop + add — переписать на `op.alter_column(..., new_column_name=...)`;
-- у каждой миграции должен быть рабочий `downgrade`.
-
-Проверка туда-обратно на тестовой базе:
+Новая миграция — новый файл `NNNN_...sql` и прогон туда-обратно:
 
 ```bash
-docker compose run --rm --no-deps -u root -v "$PWD/backend:/app" backend sh -c \
-  'export DATABASE_URL="${DATABASE_URL%/*}/poliv_test"; alembic upgrade head && alembic downgrade -1 && alembic upgrade head'
-```
-
-На сервере миграции применяются сами при старте backend. Перед выкаткой миграции, меняющей данные,
-снять ручной бэкап (см. [deploy.md](deploy.md#бэкапы)).
-
-## Все тесты
-
-```bash
-docker compose exec db sh -c 'createdb -U "$POSTGRES_USER" poliv_test' 2>/dev/null
-docker compose run --rm --no-deps -u root -v "$PWD/backend:/app" backend sh -c \
-  'export TEST_DATABASE_URL="${DATABASE_URL%/*}/poliv_test"; pip install -q pytest httpx && python -m pytest -q'
+# на пустой базе: подняться с нуля
+docker compose exec db sh -c 'createdb -U "$POSTGRES_USER" poliv_test 2>/dev/null || true'
+docker run --rm --network poliv_default -v "$PWD/backend-go:/src" -w /src \
+  -e TEST_DATABASE_URL="postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@db:5432/poliv_test" \
+  -e JWT_SECRET=test -e TZ=Europe/Moscow golang:1.24-alpine sh -c 'go test ./internal/api/'
 ```
 
 `poliv_test` пересоздаётся при каждом прогоне; тесты откажутся работать с базой без «test» в имени.
+
+## Все тесты
+
+Юнит (без БД): `cd backend-go && go vet ./... && go test ./...` — API-тесты при этом пропускаются.
+
+API-тесты на реальном Postgres (отдельная база `poliv_test`, не рабочая `poliv`):
+
+```bash
+docker compose exec db sh -c 'createdb -U "$POSTGRES_USER" poliv_test 2>/dev/null || true'
+POSTGRES_USER=$(grep '^POSTGRES_USER=' .env | cut -d= -f2)
+POSTGRES_PASSWORD=$(grep '^POSTGRES_PASSWORD=' .env | cut -d= -f2)
+NETWORK=$(docker inspect poliv-backend-1 --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')
+docker run --rm --network "$NETWORK" -v "$PWD/backend-go:/src" -w /src \
+  -e TEST_DATABASE_URL="postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@db:5432/poliv_test" \
+  -e JWT_SECRET=test-secret -e TZ=Europe/Moscow \
+  golang:1.24-alpine sh -c 'go test ./internal/api/'
+```

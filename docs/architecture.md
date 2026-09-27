@@ -9,13 +9,13 @@
                 └──────────────────────────────────┘     │   └─ polivalochka.ru → poliv-web:80    │
                                                          └────────────────────────────────────────┘
 poliv-web (nginx):  /api/* ─▶ poliv-api:8000 (backend)     остальное ─▶ собранный SPA (index.html fallback)
-backend (FastAPI):  миграции Alembic при старте ─▶ db (PostgreSQL 16, volume pgdata)
+backend (Go):       миграции SQL при старте ─▶ db (PostgreSQL 16, volume pgdata)
 ```
 
 | Сервис | Образ | Роль |
 |---|---|---|
 | `db` | `postgres:16-alpine` | Данные в volume `pgdata` |
-| `backend` | `backend/Dockerfile` (python 3.12-slim) | FastAPI + SQLAlchemy 2 + Alembic; в сети — алиас `poliv-api` |
+| `backend` | `backend-go/Dockerfile` (статический бинарник, distroless) | Go API (net/http, pgx); в сети — алиас `poliv-api` |
 | `poliv-web` | `frontend/Dockerfile` (node → nginx) | Статика SPA и прокси `/api` на backend — единственная точка входа |
 | `caddy` | `caddy:2-alpine` | Только локально: HTTPS перед `poliv-web`. На сервере отключён (`docker-compose.server.yml`) |
 
@@ -46,16 +46,17 @@ users ─┬─< plants ─┬─< watering_logs
   — одна горящая сессия на лампу (повторное включение → 409); `uq_plant_lamp_open (plant_id) WHERE ended_at IS NULL`
   — у растения сейчас только одна лампа.
 - Все времена — `timestamptz`.
-- Миграции: `0001` — схема и стартовые данные, `0002` — мультиучётки (старые данные → заглушка владельца id=1),
-  `0003` — свет (город, световой день, расписания; `lamp_hours_per_day` → `light_target_hours`),
-  `0004` — лампы как объекты: неявные «своя/общая» становятся лампами, периоды привязки, токен Яндекса,
-  `0005` — проверка грунта (`soil_checks`) и пауза лампы (`lamps.paused_until`, `lamp_sessions.after_pause`).
+- Миграции исторически созданы Alembic (`0001` — схема и стартовые данные, `0002` — мультиучётки,
+  `0003` — свет, `0004` — лампы, `0005` — проверка грунта и пауза). Go-бэкенд их не пересоздаёт
+  и не «чинит»: на существующей базе ничего не меняет, на пустой поднимает эквивалент головы
+  одной базовой SQL-миграцией (`internal/migrate/sql/0001_baseline.sql`). Будущие миграции — простые
+  SQL-файлы с раннером (`pg_migrations`).
 
 ## Правила статусов
 
 Считаются **только на бэкенде**, фронтенд показывает готовые поля `GET /api/plants/summary`.
-Чистые функции без БД — `backend/app/services/summary.py` (тесты — `tests/test_summary.py`);
-сборка из БД — `services/plants.py`. Дни календарные, в поясе `TZ` (Europe/Moscow).
+Чистые функции без БД — `backend-go/internal/summary` (тесты — `summary_test.go`);
+сборка из БД — `internal/plants`. Дни календарные, в поясе `TZ` (Europe/Moscow).
 
 Статус: `ok` (зелёный) · `soon` (жёлтый, «скоро») · `late` (красный, «пора») · `off` (серый, выключено).
 
@@ -89,14 +90,14 @@ users ─┬─< plants ─┬─< watering_logs
   при `paused_until > now` (зависший в прошлом сбрасывается даже без смены розетки и наружу отдаётся как `null`).
 - Режим «Авто»: лампа досвечивает до нормы самого требовательного растения — половину нехватки утром до рассвета,
   остаток вечером после заката; чего в вечер не влезло (до `evening_not_after`) — дневная часть вплотную перед
-  закатом, в пасмурный день лампа горит и днём. Правила — `summary.py`, логика — `services/lamps.py`.
-- Фоновая задача шаг в минуту (`main.py` → `lamps.tick`): сессии по расписаниям ламп в режиме `schedule`,
+  закатом, в пасмурный день лампа горит и днём. Правила — `internal/summary`, логика — `internal/lamps`.
+- Фоновая задача шаг в минуту (`main.go` → `lamps.Tick`): сессии по расписаниям ламп в режиме `schedule`,
   пересчёт досветки, команда розетке — только при смене нужного состояния (`last_state`). Ошибка розетки
   записывается в `lamps.last_error` и повторяется на следующем шаге; 401 от Яндекса помечает
   `user_settings.yandex_token_invalid` («токен недействителен»).
-- Умная розетка: `services/yandex.py` (список устройств и вкл/выкл), токен учётки хранится зашифрованным
-  (`services/secret_box.py`, ключ из `JWT_SECRET`) и не возвращается в API.
-- Отдельно, раз в 30 минут и при старте — `services/light.sync_all`: только свет по городу из Open-Meteo
+- Умная розетка: `internal/yandex` (список устройств и вкл/выкл), токен учётки хранится зашифрованным
+  (`internal/secretbox`, ключ из `JWT_SECRET`) и не возвращается в API.
+- Отдельно, раз в 30 минут и при старте — `internal/light.SyncAll`: только свет по городу из Open-Meteo
   (`past_days=2`, `forecast_days=3`), не чаще раза в 3 часа. Смена расписания пересоздаёт только сегодняшние
   сессии, прошлые дни не меняются.
 - Кнопка «Лампа» гасит то, что горит сейчас (ручное включение, сессия по расписанию или досветка — «выключил раньше»),
@@ -110,7 +111,7 @@ users ─┬─< plants ─┬─< watering_logs
   (`sub` = id учётки, `ver` = `users.token_version`, срок `JWT_EXPIRE_DAYS`).
 - `current_user` на каждом запросе читает учётку из БД: заблокирована или `ver` не совпал → 401.
   Смена пароля и блокировка увеличивают `token_version` — все выданные токены умирают сразу.
-- Пароли — scrypt (stdlib), `backend/app/passwords.py`. Неверный пароль → пауза 1 с.
+- Пароли — scrypt (stdlib), `internal/passwords`. Неверный пароль → пауза 1 с.
 - Изоляция: доступ по id только через `crud.owned_plant / owned_fertilizer / owned_log / owned_lamp / owned_lamp_session`;
   чужая запись отвечает 404, как несуществующая. Списки фильтруются по `user_id`.
 - Админка `/api/admin/*` — только `is_admin`, остальным 404. Подробнее — [accounts.md](accounts.md).

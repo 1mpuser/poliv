@@ -75,14 +75,12 @@ func (m *Migrator) Up(ctx context.Context) error {
 }
 
 func (m *Migrator) schemaExists(ctx context.Context) bool {
-	var exists bool
-	err := m.pool.QueryRow(ctx, `SELECT EXISTS (
-		SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='users'
-	)`).Scan(&exists)
+	var ok bool
+	err := m.pool.QueryRow(ctx, `SELECT to_regclass('public.users') IS NOT NULL`).Scan(&ok)
 	if err != nil {
 		return false
 	}
-	return exists
+	return ok
 }
 
 func (m *Migrator) appliedSet(ctx context.Context) (map[string]bool, error) {
