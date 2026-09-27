@@ -492,6 +492,7 @@ svg.i { width: 24px; height: 24px; flex: none; fill: none; stroke: currentColor;
 .login__card .logo { width: 72px; height: 72px; margin: 0 auto 8px; }
 .login__card h1 { text-align: center; font-size: 26px; margin-bottom: 8px; }
 body:has(.login) { padding-bottom: 0; }
+.login__about { text-align: center; font-size: 14px; line-height: 1.45; color: var(--ink-2); margin: -4px 0 6px; }
 
 .notes { white-space: pre-wrap; color: var(--ink-2); font-size: 15px; margin-top: 12px; }
 

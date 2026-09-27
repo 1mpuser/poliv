@@ -26,7 +26,11 @@ export function Login({ onLogin }: { onLogin: () => void }) {
         }}
       >
         <img className="logo" src="/icon.svg" alt="" />
-        <h1>Мои растения</h1>
+        <h1>Поливалка</h1>
+        <p className="login__about">
+          Личный трекер ухода за растениями: полив, подкормки, досветка. Закрытый сервис —
+          учётки выдаёт администратор, регистрации нет.
+        </p>
         <input
           className="input"
           name="email"
