@@ -101,6 +101,11 @@ func fetchDays(latitude, longitude float64, tz *time.Location) ([]DayRow, error)
 	if err != nil {
 		return nil, err
 	}
+	return parseDays(data, tz)
+}
+
+// parseDays — ответ Open-Meteo → строки по дням. Длительности там в секундах, в БД — часы.
+func parseDays(data map[string]any, tz *time.Location) ([]DayRow, error) {
 	daily, _ := data["daily"].(map[string]any)
 	if daily == nil {
 		return nil, fmt.Errorf("no daily data")
@@ -128,23 +133,16 @@ func fetchDays(latitude, longitude float64, tz *time.Location) ([]DayRow, error)
 				row.Sunset = &t
 			}
 		}
-		row.DaylightHours = round2(daylight[i])
-		row.SunshineHours = round2(sunshine[i])
+		row.DaylightHours = secondsToHours(daylight[i])
+		row.SunshineHours = secondsToHours(sunshine[i])
 		out = append(out, row)
 	}
 	return out, nil
 }
 
-func round2(v any) float64 {
-	switch n := v.(type) {
-	case float64:
-		return math.Round(n*100) / 100
-	case int:
-		return math.Round(float64(n)*100) / 100
-	case nil:
-		return 0
-	}
-	return 0
+func secondsToHours(v any) float64 {
+	sec, _ := v.(float64)
+	return math.Round(sec/3600*100) / 100
 }
 
 // SyncDaylight — обновить свет по городу учётки. True — ходили в Open-Meteo.
