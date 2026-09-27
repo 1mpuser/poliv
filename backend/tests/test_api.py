@@ -742,3 +742,182 @@ def test_pause_off_lamp_is_409(client, admin):
 
     assert client.post(f"/api/lamps/{lamp['id']}/pause", headers=auth(t)).status_code == 409
     assert client.delete(f"/api/lamps/{lamp['id']}/pause", headers=auth(t)).status_code == 409
+
+
+def _auto_plus_manual_burning(client, admin, monkeypatch, day):
+    """Лампа «Авто» с розеткой: на момент at(6,30) горят и утренняя досветка, и открытая ручная сессия.
+    Возвращает (uid, lamp_id, calls, at, lamps)."""
+    from datetime import datetime
+
+    from app.config import settings
+    from app.db import SessionLocal
+    from app.models import DaylightDay, Lamp, LampSession, LampSource
+    from app.services import lamps, light, yandex
+
+    tz = settings.zone
+
+    def at(h, m=0):
+        return datetime(day.year, day.month, day.day, h, m, tzinfo=tz)
+
+    calls = []
+    monkeypatch.setattr(light, "fetch_days", lambda lat, lon: [])
+    monkeypatch.setattr(yandex, "list_devices", lambda token: [])
+    monkeypatch.setattr(yandex, "set_on", lambda token, dev, on: calls.append((dev, on)))
+
+    uid, t = make_user(client, admin, f"amb{day.year}@example.com")
+    lemon = client.post("/api/plants", json={"name": "Лимон", "light_target_hours": 12}, headers=auth(t)).json()
+    client.patch("/api/settings", json={"location_name": "Москва", "latitude": 55.75, "longitude": 37.62}, headers=auth(t))
+    client.put("/api/settings/yandex-token", json={"token": "y0_test-token-123"}, headers=auth(t))
+    lamp_id = client.post(
+        "/api/lamps",
+        json={"name": "Лампа цитрусы", "mode": "auto", "device_id": f"dev-{day.year}", "device_name": "Розетка",
+              "plant_ids": [lemon["id"]]},
+        headers=auth(t),
+    ).json()["id"]
+
+    with SessionLocal() as db:
+        db.merge(DaylightDay(user_id=uid, day=day, sunrise=at(9), sunset=at(16, 30), daylight_hours=7.5, sunshine_hours=2.0))
+        db.commit()
+        calls.clear()
+        lamps.tick(db, now=at(5))       # досветка: [6:00,9:00], [16:00,16:30], [16:30,23:00]
+        lamps.toggle(db, db.get(Lamp, lamp_id), at(5, 30))  # включили вручную — открытая manual
+        calls.clear()
+        lamps.tick(db, now=at(6, 30))
+        assert lamps.covering_sessions(db, lamp_id, at(6, 30))  # и досветка, и ручная
+    return uid, lamp_id, calls, at, lamps
+
+
+def test_pause_cuts_all_burning_sessions(client, admin, monkeypatch):
+    from datetime import date
+
+    from sqlalchemy import select
+
+    from app.db import SessionLocal
+    from app.models import Lamp, LampSession, LampSource
+
+    day = date(2036, 1, 15)
+    uid, lamp_id, calls, at, lamps = _auto_plus_manual_burning(client, admin, monkeypatch, day)
+
+    with SessionLocal() as db:
+        lamps.pause(db, db.get(Lamp, lamp_id), at(6, 30))
+        assert db.get(Lamp, lamp_id).paused_until == at(6, 40)
+        assert calls[-1] == (f"dev-{day.year}", False)  # розетка выключилась
+        assert not lamps.covering_sessions(db, lamp_id, at(6, 30))
+
+        all_s = db.scalars(select(LampSession).where(LampSession.lamp_id == lamp_id)).all()
+        auto_tail = [s for s in all_s if s.source == LampSource.auto and s.after_pause]
+        manual_tail = [s for s in all_s if s.source == LampSource.manual and s.after_pause]
+        assert auto_tail and auto_tail[-1].started_at == at(6, 40) and auto_tail[-1].ended_at == at(9, 10)
+        assert manual_tail and manual_tail[-1].started_at == at(6, 40) and manual_tail[-1].ended_at is None
+
+        # через 10 минут tick включает обратно
+        lamps.tick(db, now=at(6, 41))
+        assert db.get(Lamp, lamp_id).paused_until is None
+        assert calls[-1] == (f"dev-{day.year}", True)
+
+        lamps.archive(db, db.get(Lamp, lamp_id), at(7))
+
+
+def test_toggle_off_cuts_all_burning_sessions(client, admin, monkeypatch):
+    from datetime import date
+
+    from app.db import SessionLocal
+    from app.models import Lamp
+
+    day = date(2037, 1, 15)
+    uid, lamp_id, calls, at, lamps = _auto_plus_manual_burning(client, admin, monkeypatch, day)
+
+    with SessionLocal() as db:
+        lamps.toggle(db, db.get(Lamp, lamp_id), at(6, 30))
+        assert calls[-1] == (f"dev-{day.year}", False)  # гасит розетку
+        assert not lamps.covering_sessions(db, lamp_id, at(6, 30))
+        lamps.archive(db, db.get(Lamp, lamp_id), at(7))
+
+
+def test_schedule_pause_expiry_clears_flag(client, admin, monkeypatch):
+    from datetime import datetime
+
+    from app.config import settings
+    from app.db import SessionLocal
+    from app.models import Lamp, LampSession, LampSource
+    from app.services import lamps
+
+    tz = settings.zone
+
+    def at(h, m=0):
+        return datetime(2038, 1, 10, h, m, tzinfo=tz)
+
+    monkeypatch.setattr("app.services.yandex.set_on", lambda *a: None)
+    monkeypatch.setattr("app.services.yandex.list_devices", lambda token: [])
+    monkeypatch.setattr("app.services.light.fetch_days", lambda lat, lon: [])
+
+    uid, t = make_user(client, admin, "schedpause@example.com")
+    plant = client.post("/api/plants", json={"name": "P"}, headers=auth(t)).json()
+    lamp_id = client.post(
+        "/api/lamps", json={"name": "S", "mode": "schedule", "plant_ids": [plant["id"]]}, headers=auth(t)
+    ).json()["id"]
+
+    with SessionLocal() as db:
+        # горящая сессия по расписанию: остаток интервала меньше паузы — хвост не создаём
+        db.add(LampSession(user_id=uid, lamp_id=lamp_id, source=LampSource.schedule,
+                           started_at=at(10, 30), ended_at=at(11, 5)))
+        db.commit()
+
+        lamps.pause(db, db.get(Lamp, lamp_id), at(11))
+        assert db.get(Lamp, lamp_id).paused_until == at(11, 10)
+
+        # за пределами паузы tick сбрасывает флаг; раньше без розетки это не коммитилось
+        lamps.tick(db, now=at(11, 11))
+        assert db.get(Lamp, lamp_id).paused_until is None
+
+        # новая пауза на горящей лампе — 10 минут от now, а не продление старой
+        db.add(LampSession(user_id=uid, lamp_id=lamp_id, source=LampSource.schedule,
+                           started_at=at(11, 5), ended_at=at(12, 0)))
+        db.commit()
+        lamps.pause(db, db.get(Lamp, lamp_id), at(11, 30))
+        assert db.get(Lamp, lamp_id).paused_until == at(11, 40)
+        lamps.archive(db, db.get(Lamp, lamp_id), at(11, 40))
+
+
+def test_pause_ignores_expired_flag(client, admin, monkeypatch):
+    from datetime import datetime
+
+    from sqlalchemy import select
+
+    from app.config import settings
+    from app.db import SessionLocal
+    from app.models import Lamp, LampSession, LampSource
+    from app.services import lamps
+
+    tz = settings.zone
+
+    def at(h, m=0):
+        return datetime(2039, 1, 10, h, m, tzinfo=tz)
+
+    monkeypatch.setattr("app.services.yandex.set_on", lambda *a: None)
+    monkeypatch.setattr("app.services.yandex.list_devices", lambda token: [])
+    monkeypatch.setattr("app.services.light.fetch_days", lambda lat, lon: [])
+
+    uid, t = make_user(client, admin, "stalepause@example.com")
+    plant = client.post("/api/plants", json={"name": "P"}, headers=auth(t)).json()
+    lamp_id = client.post(
+        "/api/lamps", json={"name": "M", "mode": "manual", "plant_ids": [plant["id"]]}, headers=auth(t)
+    ).json()["id"]
+
+    with SessionLocal() as db:
+        lamp = db.get(Lamp, lamp_id)
+        lamp.paused_until = at(10, 0)  # завис в прошлом
+        db.add(LampSession(user_id=uid, lamp_id=lamp_id, source=LampSource.manual, started_at=at(10, 30)))
+        db.commit()
+
+        lamps.pause(db, db.get(Lamp, lamp_id), at(11))
+        # это новая пауза от now, а не продление зависшей
+        assert db.get(Lamp, lamp_id).paused_until == at(11, 10)
+        tails = db.scalars(
+            select(LampSession).where(LampSession.lamp_id == lamp_id, LampSession.after_pause.is_(True))
+        ).all()
+        assert tails[-1].started_at == at(11, 10)
+        lamps.archive(db, db.get(Lamp, lamp_id), at(11, 30))
+
+
+

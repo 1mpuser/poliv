@@ -119,7 +119,10 @@ def pause(lamp_id: int, user: CurrentUser, db: DB):
     """Пауза на 10 минут: лампа гаснет, хвост продолжит сессию. Повторная — продлевает паузу."""
     lamp = crud.owned_lamp(db, user, lamp_id)
     now = now_utc()
-    svc.pause(db, lamp, now)
+    try:
+        svc.pause(db, lamp, now)
+    except svc.LampNotOn:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Лампа не горит — её не нужно ставить на паузу")
     return svc.lamp_out(db, lamp, now)
 
 
@@ -128,7 +131,10 @@ def resume(lamp_id: int, user: CurrentUser, db: DB):
     """«Продолжить» раньше срока: хвост начинается с now, неиспользованная пауза сдвигает конец."""
     lamp = crud.owned_lamp(db, user, lamp_id)
     now = now_utc()
-    svc.resume(db, lamp, now)
+    try:
+        svc.resume(db, lamp, now)
+    except svc.LampNotPaused:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Лампа не на паузе")
     return svc.lamp_out(db, lamp, now)
 
 
