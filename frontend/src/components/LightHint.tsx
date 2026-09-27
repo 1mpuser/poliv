@@ -27,9 +27,13 @@ export function LightHint({ light }: { light: LightSummary }) {
   if (light.deficit_hours <= 0) {
     text = `Света хватает: ${fmtHours(light.total_hours)} ч при норме ${fmtHours(light.target_hours)}`;
     if (plan) text += ` — ${auto!.name} досветит ${plan}`;
+  } else if (auto && plan) {
+    text = `Не хватает ${fmtHours(light.deficit_hours)} ч даже с досветкой (${plan})`;
   } else if (auto) {
-    text = `Не хватает ${fmtHours(light.deficit_hours)} ч даже с досветкой`;
-    if (plan) text += ` (${plan})`;
+    // план пуст: лампа на паузе или «Авто» ещё не пересчитал день
+    text = auto.paused_until
+      ? `Не хватает ${fmtHours(light.deficit_hours)} ч — ${auto.name} на паузе до ${fmtTime(auto.paused_until)}`
+      : `Не хватает ${fmtHours(light.deficit_hours)} ч — досветка ещё не запланирована`;
   } else if (light.suggestion_start && light.suggestion_end) {
     text = `Не хватает ${fmtHours(light.deficit_hours)} ч — лампа ${fmtTime(light.suggestion_start)}–${fmtTime(light.suggestion_end)}`;
     if (light.suggestion_until_midnight) text += ', и до полуночи не хватит';
