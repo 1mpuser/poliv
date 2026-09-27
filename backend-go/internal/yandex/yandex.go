@@ -26,6 +26,9 @@ type YandexAuthError struct{ msg string }
 
 func (e *YandexAuthError) Error() string { return e.msg }
 
+func NewYandexError(msg string) *YandexError     { return &YandexError{msg} }
+func NewAuthError(msg string) *YandexAuthError   { return &YandexAuthError{msg} }
+
 type Device struct {
 	ID   string
 	Name string

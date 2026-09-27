@@ -1079,6 +1079,11 @@ func (s *Service) CoveringSession(ctx context.Context, lampID int, now time.Time
 	return s.coveringSession(ctx, lampID, now)
 }
 
+// CoveringSessions — все горящие сейчас сессии лампы (ручная + досветка могут идти одновременно).
+func (s *Service) CoveringSessions(ctx context.Context, lampID int, now time.Time) ([]*models.LampSession, error) {
+	return s.coveringSessions(ctx, lampID, now)
+}
+
 // Brief — лампа растения в сводке.
 func (s *Service) Brief(ctx context.Context, lamp *models.Lamp, now time.Time) (*schema.LampBrief, error) {
 	if lamp == nil {

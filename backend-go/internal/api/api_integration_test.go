@@ -772,6 +772,9 @@ func TestPauseOffLampIs409(t *testing.T) {
 // ---------- авто-досветка (над DB, сеть не трогаем) ----------
 
 func autoLampSetup(t *testing.T, day time.Time) (int, int, string, func(h, m int) time.Time) {
+	light.FetchDays = func(lat, lon float64, tz *time.Location) ([]light.DayRow, error) { return nil, nil }
+	testSrv.Lamps.YandexSetOn = func(token, dev string, on bool) error { return nil }
+	testSrv.Lamps.YandexListDevices = func(token string) ([]yandex.Device, error) { return nil, nil }
 	admin := adminToken(t)
 	uid, tok := makeUser(t, admin, fmt.Sprintf("autolamp%d@example.com", day.Unix()), "user-pass-1")
 	var lemon map[string]any
@@ -936,4 +939,655 @@ func TestLocationFetchesDaylight(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("extra calls %d", calls)
 	}
+}
+
+// ---------- вспомогательные для ламп/паузы ----------
+
+type plugCall struct {
+	dev string
+	on  bool
+}
+
+func setPlugCalls(calls *[]plugCall) {
+	testSrv.Lamps.YandexSetOn = func(token, dev string, on bool) error {
+		*calls = append(*calls, plugCall{dev, on})
+		return nil
+	}
+	testSrv.Lamps.YandexListDevices = func(token string) ([]yandex.Device, error) { return nil, nil }
+}
+
+// createAutoLamp — учётка + растение (норма 12ч) + город + токен + авто-лампа с розеткой,
+// и свет за день (восход 9:00, закат 16:30, солнце 2ч). Возвращает uid, lampID, токен, at().
+func createAutoLamp(t *testing.T, day time.Time, device string) (int, int, string, func(int, int) time.Time) {
+	light.FetchDays = func(lat, lon float64, tz *time.Location) ([]light.DayRow, error) { return nil, nil }
+	testSrv.Lamps.YandexSetOn = func(token, dev string, on bool) error { return nil }
+	testSrv.Lamps.YandexListDevices = func(token string) ([]yandex.Device, error) { return nil, nil }
+	admin := adminToken(t)
+	uid, tok := makeUser(t, admin, fmt.Sprintf("autolamp-%s-%d@example.com", device, day.Year()), "user-pass-1")
+	var lemon map[string]any
+	resp := req(t, "POST", "/api/plants", map[string]any{"name": "Лимон", "light_target_hours": 12}, tok)
+	decode(t, resp, &lemon)
+	pid := int(lemon["id"].(float64))
+	req(t, "PATCH", "/api/settings", map[string]any{"latitude": 55.75, "longitude": 37.62, "location_name": "Москва"}, tok)
+	req(t, "PUT", "/api/settings/yandex-token", map[string]any{"token": "y0_test-token-123"}, tok)
+	resp = req(t, "POST", "/api/lamps", map[string]any{"name": "Лампа цитрусы", "mode": "auto",
+		"device_id": device, "device_name": "Розетка", "plant_ids": []int{pid}}, tok)
+	if resp.StatusCode != 201 {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("create lamp -> %d: %s", resp.StatusCode, string(b))
+	}
+	var lamp map[string]any
+	decode(t, resp, &lamp)
+	lampID := int(lamp["id"].(float64))
+	at := func(h, m int) time.Time { return time.Date(day.Year(), day.Month(), day.Day(), h, m, 0, 0, zoneLoc) }
+	if _, err := testPool.Exec(context.Background(), `INSERT INTO daylight_days (user_id, day, sunrise, sunset, daylight_hours, sunshine_hours)
+		VALUES ($1, $2, $3, $4, 7.5, 2.0) ON CONFLICT (user_id, day) DO UPDATE SET sunrise=EXCLUDED.sunrise, sunset=EXCLUDED.sunset`,
+		uid, day, at(9, 0), at(16, 30)); err != nil {
+		t.Fatal(err)
+	}
+	return uid, lampID, tok, at
+}
+
+type lampRow struct {
+	source     string
+	startedAt  time.Time
+	endedAt    *time.Time
+	afterPause bool
+}
+
+func lampSessionsFor(t *testing.T, lampID int) []lampRow {
+	t.Helper()
+	rows, err := testPool.Query(context.Background(), `SELECT source::text, started_at, ended_at, after_pause
+		FROM lamp_sessions WHERE lamp_id=$1 ORDER BY started_at`, lampID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []lampRow
+	for rows.Next() {
+		var r lampRow
+		if err := rows.Scan(&r.source, &r.startedAt, &r.endedAt, &r.afterPause); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+func afterPause(t *testing.T, lampID int, source string) []lampRow {
+	var out []lampRow
+	for _, r := range lampSessionsFor(t, lampID) {
+		if r.afterPause && r.source == source {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func autoPlan(t *testing.T, lampID int) [][2]time.Time {
+	var out [][2]time.Time
+	for _, r := range lampSessionsFor(t, lampID) {
+		if r.source == "auto" {
+			e := time.Time{}
+			if r.endedAt != nil {
+				e = *r.endedAt
+			}
+			out = append(out, [2]time.Time{r.startedAt, e})
+		}
+	}
+	return out
+}
+
+func pauseUntil(t *testing.T, lampID int) *time.Time {
+	l, err := testSrv.Lamps.GetLamp(context.Background(), lampID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return l.PausedUntil
+}
+
+func callsLast(calls []plugCall, dev string, on bool) bool {
+	if len(calls) == 0 {
+		return false
+	}
+	last := calls[len(calls)-1]
+	return last.dev == dev && last.on == on
+}
+
+// ---------- история и архив ----------
+
+func TestMoveAndArchiveKeepHistory(t *testing.T) {
+	requireDB(t)
+	admin := adminToken(t)
+	_, tok := makeUser(t, admin, "move@example.com", "user-pass-1")
+	var plant map[string]any
+	resp := req(t, "POST", "/api/plants", map[string]any{"name": "P"}, tok)
+	decode(t, resp, &plant)
+	pid := int(plant["id"].(float64))
+	var a, b map[string]any
+	resp = req(t, "POST", "/api/lamps", map[string]any{"name": "A", "plant_ids": []int{pid}}, tok)
+	decode(t, resp, &a)
+	resp = req(t, "POST", "/api/lamps", map[string]any{"name": "B"}, tok)
+	decode(t, resp, &b)
+	aID, bID := int(a["id"].(float64)), int(b["id"].(float64))
+
+	flick := func(lid int) {
+		req(t, "POST", fmt.Sprintf("/api/lamps/%d/toggle", lid), nil, tok).Body.Close()
+		req(t, "POST", fmt.Sprintf("/api/lamps/%d/toggle", lid), nil, tok).Body.Close()
+	}
+	lampNames := func() []string {
+		var ev []map[string]any
+		getJSON(t, fmt.Sprintf("/api/plants/%d/history?types=lamp", pid), tok, &ev)
+		var names []string
+		for _, e := range ev {
+			names = append(names, e["lamp_name"].(string))
+		}
+		return sortedStrings(names)
+	}
+
+	flick(aID)
+	if got := lampNames(); len(got) != 1 || got[0] != "A" {
+		t.Fatalf("flick a: %v", got)
+	}
+	resp = req(t, "PUT", fmt.Sprintf("/api/plants/%d/lamp", pid), map[string]any{"lamp_id": bID}, tok)
+	if resp.StatusCode != 200 {
+		t.Fatalf("move -> %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+	flick(aID)
+	flick(bID)
+	if got := lampNames(); len(got) != 2 || got[0] != "A" || got[1] != "B" {
+		t.Fatalf("after move: %v", got)
+	}
+
+	resp = req(t, "DELETE", fmt.Sprintf("/api/lamps/%d", aID), nil, tok)
+	if resp.StatusCode != 204 {
+		t.Fatalf("archive -> %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+	resp = req(t, "GET", fmt.Sprintf("/api/lamps/%d", aID), nil, tok)
+	if resp.StatusCode != 404 {
+		t.Fatalf("get archived -> %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	var lamps []map[string]any
+	getJSON(t, "/api/lamps", tok, &lamps)
+	if len(lamps) != 1 || lamps[0]["name"] != "B" {
+		t.Fatalf("lamps %v", lamps)
+	}
+	if got := lampNames(); len(got) != 2 || got[0] != "A" || got[1] != "B" {
+		t.Fatalf("after archive: %v", got)
+	}
+}
+
+func TestYandexTokenIsEncryptedAndNeverReturned(t *testing.T) {
+	requireDB(t)
+	admin := adminToken(t)
+	_, tok := makeUser(t, admin, "token@example.com", "user-pass-1")
+	uid := userID(t, "token@example.com")
+
+	testSrv.Lamps.YandexListDevices = func(token string) ([]yandex.Device, error) {
+		if token != "y0_good-token-123" {
+			return nil, &yandex.YandexAuthError{}
+		}
+		room := "Спальня"
+		return []yandex.Device{{ID: "dev-1", Name: "Лампа цитрусы", Room: &room, Type: "devices.types.socket"}}, nil
+	}
+
+	var s map[string]any
+	getJSON(t, "/api/settings", tok, &s)
+	if s["yandex_status"] != "none" {
+		t.Fatalf("initial %v", s)
+	}
+	resp := req(t, "GET", "/api/yandex/devices", nil, tok)
+	if resp.StatusCode != 400 {
+		t.Fatalf("devices no token -> %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+	resp = req(t, "PUT", "/api/settings/yandex-token", map[string]any{"token": "y0_bad-token-123"}, tok)
+	if resp.StatusCode != 400 {
+		t.Fatalf("bad token -> %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	resp = req(t, "PUT", "/api/settings/yandex-token", map[string]any{"token": "y0_good-token-123"}, tok)
+	if resp.StatusCode != 200 {
+		t.Fatalf("good token -> %d", resp.StatusCode)
+	}
+	decode(t, resp, &s)
+	if s["yandex_status"] != "ok" {
+		t.Fatalf("after set %v", s)
+	}
+
+	var devs []map[string]any
+	getJSON(t, "/api/yandex/devices", tok, &devs)
+	if len(devs) != 1 || devs[0]["id"] != "dev-1" || devs[0]["name"] != "Лампа цитрусы" || devs[0]["room"] != "Спальня" {
+		t.Fatalf("devs %v", devs)
+	}
+	var stored string
+	_ = testPool.QueryRow(context.Background(), `SELECT yandex_token FROM user_settings WHERE user_id=$1`, uid).Scan(&stored)
+	if stored == "" || strings.Contains(stored, "y0_good") {
+		t.Fatalf("stored token %q", stored)
+	}
+
+	resp = req(t, "PUT", "/api/settings/yandex-token", map[string]any{"token": nil}, tok)
+	decode(t, resp, &s)
+	if s["yandex_status"] != "none" {
+		t.Fatalf("after clear %v", s)
+	}
+}
+
+func userID(t *testing.T, email string) int {
+	var id int
+	_ = testPool.QueryRow(context.Background(), `SELECT id FROM users WHERE email=$1`, email).Scan(&id)
+	return id
+}
+
+func sortedStrings(in []string) []string {
+	for i := 1; i < len(in); i++ {
+		for j := i; j > 0 && in[j] < in[j-1]; j-- {
+			in[j], in[j-1] = in[j-1], in[j]
+		}
+	}
+	return in
+}
+
+func TestAutoLampPlansDaytimePart(t *testing.T) {
+	requireDB(t)
+	day := time.Date(2030, 1, 20, 0, 0, 0, 0, zoneLoc)
+	_, lampID, _, at := createAutoLamp(t, day, "dev-2")
+	var calls []plugCall
+	setPlugCalls(&calls)
+	lightFetchDaysOff()
+
+	_ = testSrv.Lamps.Tick(context.Background(), at(14, 0))
+	plan := autoPlan(t, lampID)
+	if len(plan) != 2 || !plan[0][0].Equal(at(14, 0)) || !plan[0][1].Equal(at(16, 30)) ||
+		!plan[1][0].Equal(at(16, 30)) || !plan[1][1].Equal(at(23, 0)) {
+		t.Fatalf("plan %v", plan)
+	}
+	if len(calls) != 1 || calls[0].dev != "dev-2" || calls[0].on != true {
+		t.Fatalf("calls %v", calls)
+	}
+}
+
+func lightFetchDaysOff() {
+	// гарантируем отсутствие сети в тестах света
+}
+
+func TestPlugErrorsAndArchive(t *testing.T) {
+	requireDB(t)
+	admin := adminToken(t)
+	_, tok := makeUser(t, admin, "plug@example.com", "user-pass-1")
+	var plant map[string]any
+	resp := req(t, "POST", "/api/plants", map[string]any{"name": "P"}, tok)
+	decode(t, resp, &plant)
+	pid := int(plant["id"].(float64))
+
+	fail := true
+	var calls []plugCall
+	testSrv.Lamps.YandexSetOn = func(token, dev string, on bool) error {
+		calls = append(calls, plugCall{dev, on})
+		if fail {
+			return yandex.NewYandexError("Умный дом Яндекса недоступен")
+		}
+		return nil
+	}
+	testSrv.Lamps.YandexListDevices = func(token string) ([]yandex.Device, error) { return nil, nil }
+
+	// розетка задана, токена нет — ошибка в лампе без падения
+	var lamp map[string]any
+	resp = req(t, "POST", "/api/lamps", map[string]any{"name": "L", "device_id": "dev-9", "plant_ids": []int{pid}}, tok)
+	decode(t, resp, &lamp)
+	if lamp["last_error"] != "Не задан токен Яндекса" {
+		t.Fatalf("last_error %v", lamp["last_error"])
+	}
+	req(t, "PUT", "/api/settings/yandex-token", map[string]any{"token": "y0_test-token-123"}, tok)
+	lampID := int(lamp["id"].(float64))
+
+	var on map[string]any
+	resp = req(t, "POST", fmt.Sprintf("/api/lamps/%d/toggle", lampID), nil, tok)
+	decode(t, resp, &on)
+	if on["is_on"] != true || on["plug_error"] != "Умный дом Яндекса недоступен" {
+		t.Fatalf("toggle %v", on)
+	}
+	getJSON(t, fmt.Sprintf("/api/lamps/%d", lampID), tok, &lamp)
+	if lamp["last_state"] != nil || lamp["last_error"] != "Умный дом Яндекса недоступен" {
+		t.Fatalf("lamp after toggle %v", lamp)
+	}
+
+	fail = false
+	_ = testSrv.Lamps.Tick(context.Background(), time.Now().UTC())
+	getJSON(t, fmt.Sprintf("/api/lamps/%d", lampID), tok, &lamp)
+	if lamp["last_state"] != true || lamp["last_error"] != nil {
+		t.Fatalf("lamp after tick %v", lamp)
+	}
+
+	// удалили горящую лампу — розетке «выкл»
+	resp = req(t, "DELETE", fmt.Sprintf("/api/lamps/%d", lampID), nil, tok)
+	if resp.StatusCode != 204 {
+		t.Fatalf("archive -> %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+	if !callsLast(calls, "dev-9", false) {
+		t.Fatalf("calls after archive %v", calls)
+	}
+
+	// 401 от Яндекса — токен помечается недействительным
+	var lamp2 map[string]any
+	resp = req(t, "POST", "/api/lamps", map[string]any{"name": "L2", "device_id": "dev-8"}, tok)
+	decode(t, resp, &lamp2)
+	lamp2ID := int(lamp2["id"].(float64))
+	testSrv.Lamps.YandexSetOn = func(token, dev string, on bool) error {
+		return yandex.NewAuthError("")
+	}
+	req(t, "POST", fmt.Sprintf("/api/lamps/%d/toggle", lamp2ID), nil, tok)
+	var sett map[string]any
+	getJSON(t, "/api/settings", tok, &sett)
+	if sett["yandex_status"] != "invalid" {
+		t.Fatalf("settings %v", sett)
+	}
+}
+
+func TestAutoLampPauseSurvivesTick(t *testing.T) {
+	requireDB(t)
+	day := time.Date(2032, 1, 15, 0, 0, 0, 0, zoneLoc)
+	_, lampID, _, at := createAutoLamp(t, day, "dev-1")
+	var calls []plugCall
+	setPlugCalls(&calls)
+	lightFetchDaysOff()
+
+	lamp, err := testSrv.Lamps.GetLamp(context.Background(), lampID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = testSrv.Lamps.Tick(context.Background(), at(5, 0))
+	_ = testSrv.Lamps.Tick(context.Background(), at(6, 30))
+	if !callsLast(calls, "dev-1", true) {
+		t.Fatalf("calls after 6:30 %v", calls)
+	}
+	lamp, err = testSrv.Lamps.GetLamp(context.Background(), lampID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := testSrv.Lamps.Pause(context.Background(), lamp, at(6, 30)); err != nil {
+		t.Fatal(err)
+	}
+	if !callsLast(calls, "dev-1", false) {
+		t.Fatalf("pause %v", calls)
+	}
+	if pu := pauseUntil(t, lampID); pu == nil || !pu.Equal(at(6, 40)) {
+		t.Fatalf("paused_until %v", pu)
+	}
+	found := false
+	for _, r := range afterPause(t, lampID, "auto") {
+		if r.startedAt.Equal(at(6, 40)) && r.endedAt != nil && r.endedAt.Equal(at(9, 10)) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no auto tail")
+	}
+
+	_ = testSrv.Lamps.Tick(context.Background(), at(6, 31))
+	if pu := pauseUntil(t, lampID); pu == nil || !pu.Equal(at(6, 40)) {
+		t.Fatalf("paused_until after tick %v", pu)
+	}
+	found = false
+	for _, r := range afterPause(t, lampID, "auto") {
+		if r.startedAt.Equal(at(6, 40)) && r.endedAt != nil && r.endedAt.Equal(at(9, 10)) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("auto tail lost")
+	}
+	if !callsLast(calls, "dev-1", false) {
+		t.Fatalf("calls during pause %v", calls)
+	}
+
+	_ = testSrv.Lamps.Tick(context.Background(), at(6, 40))
+	if pu := pauseUntil(t, lampID); pu != nil {
+		t.Fatalf("paused_until not cleared %v", pu)
+	}
+	if !callsLast(calls, "dev-1", true) {
+		t.Fatalf("calls after pause %v", calls)
+	}
+	_ = testSrv.Lamps.Archive(context.Background(), lamp, at(7, 0))
+}
+
+func TestAutoLampResumeEarlyShiftsEnd(t *testing.T) {
+	requireDB(t)
+	day := time.Date(2033, 1, 15, 0, 0, 0, 0, zoneLoc)
+	_, lampID, _, at := createAutoLamp(t, day, "dev-2")
+	var calls []plugCall
+	setPlugCalls(&calls)
+	lightFetchDaysOff()
+
+	lamp, _ := testSrv.Lamps.GetLamp(context.Background(), lampID)
+	_ = testSrv.Lamps.Tick(context.Background(), at(5, 0))
+	_ = testSrv.Lamps.Tick(context.Background(), at(6, 30))
+	if err := testSrv.Lamps.Pause(context.Background(), lamp, at(6, 30)); err != nil {
+		t.Fatal(err)
+	}
+	lamp, _ = testSrv.Lamps.GetLamp(context.Background(), lampID)
+	if err := testSrv.Lamps.Resume(context.Background(), lamp, at(6, 35)); err != nil {
+		t.Fatal(err)
+	}
+	lamp, _ = testSrv.Lamps.GetLamp(context.Background(), lampID)
+	if lamp.PausedUntil != nil {
+		t.Fatalf("paused_until after resume %v", lamp.PausedUntil)
+	}
+	tails := afterPause(t, lampID, "auto")
+	if len(tails) == 0 || !tails[len(tails)-1].startedAt.Equal(at(6, 35)) ||
+		tails[len(tails)-1].endedAt == nil || !tails[len(tails)-1].endedAt.Equal(at(9, 5)) {
+		t.Fatalf("tails %v", tails)
+	}
+	if !callsLast(calls, "dev-2", true) {
+		t.Fatalf("calls %v", calls)
+	}
+	_ = testSrv.Lamps.Archive(context.Background(), lamp, at(7, 0))
+}
+
+func TestManualLampPauseResumesByTick(t *testing.T) {
+	requireDB(t)
+	admin := adminToken(t)
+	_, tok := makeUser(t, admin, "pausem@example.com", "user-pass-1")
+	var plant map[string]any
+	resp := req(t, "POST", "/api/plants", map[string]any{"name": "P"}, tok)
+	decode(t, resp, &plant)
+	pid := int(plant["id"].(float64))
+
+	var calls []plugCall
+	setPlugCalls(&calls)
+	req(t, "PUT", "/api/settings/yandex-token", map[string]any{"token": "y0_test-token-123"}, tok)
+
+	var lamp map[string]any
+	resp = req(t, "POST", "/api/lamps", map[string]any{"name": "M", "mode": "manual", "device_id": "dev-m",
+		"device_name": "Розетка", "plant_ids": []int{pid}}, tok)
+	decode(t, resp, &lamp)
+	lampID := int(lamp["id"].(float64))
+	req(t, "POST", fmt.Sprintf("/api/lamps/%d/toggle", lampID), nil, tok)
+	if !callsLast(calls, "dev-m", true) {
+		t.Fatalf("toggle on %v", calls)
+	}
+
+	resp = req(t, "POST", fmt.Sprintf("/api/lamps/%d/pause", lampID), nil, tok)
+	if resp.StatusCode != 200 {
+		t.Fatalf("pause -> %d", resp.StatusCode)
+	}
+	decode(t, resp, &lamp)
+	if lamp["is_on"] != false || lamp["paused_until"] == nil {
+		t.Fatalf("pause resp %v", lamp)
+	}
+	if !callsLast(calls, "dev-m", false) {
+		t.Fatalf("pause off %v", calls)
+	}
+	resumeAt, err := time.Parse(time.RFC3339, lamp["paused_until"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumeAt = resumeAt.Add(time.Minute)
+	_ = testSrv.Lamps.Tick(context.Background(), resumeAt)
+	if pu := pauseUntil(t, lampID); pu != nil {
+		t.Fatalf("paused_until not cleared %v", pu)
+	}
+	if !callsLast(calls, "dev-m", true) {
+		t.Fatalf("after tick %v", calls)
+	}
+	lampGet, _ := testSrv.Lamps.GetLamp(context.Background(), lampID)
+	_ = testSrv.Lamps.Archive(context.Background(), lampGet, resumeAt)
+}
+
+func autoPlusManualSetup(t *testing.T, day time.Time, device string) (int, *[]plugCall, func(int, int) time.Time) {
+	_, lampID, _, at := createAutoLamp(t, day, device)
+	calls := []plugCall{}
+	setPlugCalls(&calls)
+	lightFetchDaysOff()
+	lamp, _ := testSrv.Lamps.GetLamp(context.Background(), lampID)
+	_ = testSrv.Lamps.Tick(context.Background(), at(5, 0))
+	_, _ = testSrv.Lamps.Toggle(context.Background(), lamp, at(5, 30))
+	calls = nil
+	_ = testSrv.Lamps.Tick(context.Background(), at(6, 30))
+	cover, _ := testSrv.Lamps.CoveringSessions(context.Background(), lampID, at(6, 30))
+	if len(cover) < 2 {
+		t.Fatalf("covering %d, want both", len(cover))
+	}
+	return lampID, &calls, at
+}
+
+func TestPauseCutsAllBurningSessions(t *testing.T) {
+	requireDB(t)
+	day := time.Date(2036, 1, 15, 0, 0, 0, 0, zoneLoc)
+	lampID, callsPtr, at := autoPlusManualSetup(t, day, "dev-2036")
+	lamp, _ := testSrv.Lamps.GetLamp(context.Background(), lampID)
+	if err := testSrv.Lamps.Pause(context.Background(), lamp, at(6, 30)); err != nil {
+		t.Fatal(err)
+	}
+	if pu := pauseUntil(t, lampID); pu == nil || !pu.Equal(at(6, 40)) {
+		t.Fatalf("paused_until %v", pu)
+	}
+	if !callsLast(*callsPtr, "dev-2036", false) {
+		t.Fatalf("pause %v", *callsPtr)
+	}
+	cover, _ := testSrv.Lamps.CoveringSessions(context.Background(), lampID, at(6, 30))
+	if len(cover) != 0 {
+		t.Fatalf("covering after pause %v", cover)
+	}
+	autoTails := afterPause(t, lampID, "auto")
+	if len(autoTails) == 0 || !autoTails[len(autoTails)-1].startedAt.Equal(at(6, 40)) ||
+		autoTails[len(autoTails)-1].endedAt == nil || !autoTails[len(autoTails)-1].endedAt.Equal(at(9, 10)) {
+		t.Fatalf("auto tails %v", autoTails)
+	}
+	manualTails := afterPause(t, lampID, "manual")
+	if len(manualTails) == 0 || !manualTails[len(manualTails)-1].startedAt.Equal(at(6, 40)) ||
+		manualTails[len(manualTails)-1].endedAt != nil {
+		t.Fatalf("manual tails %v", manualTails)
+	}
+
+	_ = testSrv.Lamps.Tick(context.Background(), at(6, 41))
+	if pu := pauseUntil(t, lampID); pu != nil {
+		t.Fatalf("paused_until not cleared %v", pu)
+	}
+	if !callsLast(*callsPtr, "dev-2036", true) {
+		t.Fatalf("after tick %v", *callsPtr)
+	}
+	lamp, _ = testSrv.Lamps.GetLamp(context.Background(), lampID)
+	_ = testSrv.Lamps.Archive(context.Background(), lamp, at(7, 0))
+}
+
+func TestToggleOffCutsAllBurningSessions(t *testing.T) {
+	requireDB(t)
+	day := time.Date(2037, 1, 15, 0, 0, 0, 0, zoneLoc)
+	lampID, callsPtr, at := autoPlusManualSetup(t, day, "dev-2037")
+	lamp, _ := testSrv.Lamps.GetLamp(context.Background(), lampID)
+	if _, err := testSrv.Lamps.Toggle(context.Background(), lamp, at(6, 30)); err != nil {
+		t.Fatal(err)
+	}
+	if !callsLast(*callsPtr, "dev-2037", false) {
+		t.Fatalf("toggle off %v", *callsPtr)
+	}
+	cover, _ := testSrv.Lamps.CoveringSessions(context.Background(), lampID, at(6, 30))
+	if len(cover) != 0 {
+		t.Fatalf("covering after toggle %v", cover)
+	}
+	lamp, _ = testSrv.Lamps.GetLamp(context.Background(), lampID)
+	_ = testSrv.Lamps.Archive(context.Background(), lamp, at(7, 0))
+}
+
+func TestSchedulePauseExpiryClearsFlag(t *testing.T) {
+	requireDB(t)
+	admin := adminToken(t)
+	uid, tok := makeUser(t, admin, "schedpause@example.com", "user-pass-1")
+	var plant map[string]any
+	resp := req(t, "POST", "/api/plants", map[string]any{"name": "P"}, tok)
+	decode(t, resp, &plant)
+	pid := int(plant["id"].(float64))
+	var lamp map[string]any
+	resp = req(t, "POST", "/api/lamps", map[string]any{"name": "S", "mode": "schedule", "plant_ids": []int{pid}}, tok)
+	decode(t, resp, &lamp)
+	lampID := int(lamp["id"].(float64))
+
+	at := func(h, m int) time.Time { return time.Date(2038, 1, 10, h, m, 0, 0, zoneLoc) }
+	_, _ = testPool.Exec(context.Background(), `INSERT INTO lamp_sessions (user_id, lamp_id, source, started_at, ended_at)
+		VALUES ($1,$2,'schedule',$3,$4)`, uid, lampID, at(10, 30), at(11, 5))
+
+	lampGet, _ := testSrv.Lamps.GetLamp(context.Background(), lampID)
+	if err := testSrv.Lamps.Pause(context.Background(), lampGet, at(11, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if pu := pauseUntil(t, lampID); pu == nil || !pu.Equal(at(11, 10)) {
+		t.Fatalf("paused_until %v", pu)
+	}
+	_ = testSrv.Lamps.Tick(context.Background(), at(11, 11))
+	if pu := pauseUntil(t, lampID); pu != nil {
+		t.Fatalf("paused_until not cleared %v", pu)
+	}
+
+	_, _ = testPool.Exec(context.Background(), `INSERT INTO lamp_sessions (user_id, lamp_id, source, started_at, ended_at)
+		VALUES ($1,$2,'schedule',$3,$4)`, uid, lampID, at(11, 5), at(12, 0))
+	lampGet, _ = testSrv.Lamps.GetLamp(context.Background(), lampID)
+	if err := testSrv.Lamps.Pause(context.Background(), lampGet, at(11, 30)); err != nil {
+		t.Fatal(err)
+	}
+	if pu := pauseUntil(t, lampID); pu == nil || !pu.Equal(at(11, 40)) {
+		t.Fatalf("second pause %v", pu)
+	}
+	lampGet, _ = testSrv.Lamps.GetLamp(context.Background(), lampID)
+	_ = testSrv.Lamps.Archive(context.Background(), lampGet, at(11, 40))
+}
+
+func TestPauseIgnoresExpiredFlag(t *testing.T) {
+	requireDB(t)
+	admin := adminToken(t)
+	uid, tok := makeUser(t, admin, "stalepause@example.com", "user-pass-1")
+	var plant map[string]any
+	resp := req(t, "POST", "/api/plants", map[string]any{"name": "P"}, tok)
+	decode(t, resp, &plant)
+	pid := int(plant["id"].(float64))
+	var lamp map[string]any
+	resp = req(t, "POST", "/api/lamps", map[string]any{"name": "M", "mode": "manual", "plant_ids": []int{pid}}, tok)
+	decode(t, resp, &lamp)
+	lampID := int(lamp["id"].(float64))
+
+	at := func(h, m int) time.Time { return time.Date(2039, 1, 10, h, m, 0, 0, zoneLoc) }
+	_, _ = testPool.Exec(context.Background(), `UPDATE lamps SET paused_until=$1 WHERE id=$2`, at(10, 0), lampID)
+	_, _ = testPool.Exec(context.Background(), `INSERT INTO lamp_sessions (user_id, lamp_id, source, started_at)
+		VALUES ($1,$2,'manual',$3)`, uid, lampID, at(10, 30))
+
+	lampGet, _ := testSrv.Lamps.GetLamp(context.Background(), lampID)
+	if err := testSrv.Lamps.Pause(context.Background(), lampGet, at(11, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if pu := pauseUntil(t, lampID); pu == nil || !pu.Equal(at(11, 10)) {
+		t.Fatalf("paused_until %v", pu)
+	}
+	tails := afterPause(t, lampID, "manual")
+	if len(tails) == 0 || !tails[len(tails)-1].startedAt.Equal(at(11, 10)) {
+		t.Fatalf("tails %v", tails)
+	}
+	lampGet, _ = testSrv.Lamps.GetLamp(context.Background(), lampID)
+	_ = testSrv.Lamps.Archive(context.Background(), lampGet, at(11, 30))
 }
