@@ -43,6 +43,9 @@ func Time(t time.Time, loc *time.Location) string {
 	if t.IsZero() {
 		return ""
 	}
+	if loc == nil {
+		loc = time.UTC
+	}
 	lt := t.In(loc)
 	s := lt.Format("2006-01-02T15:04:05")
 	micro := lt.Nanosecond() / 1000

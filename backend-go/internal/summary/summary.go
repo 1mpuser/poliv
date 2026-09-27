@@ -112,9 +112,13 @@ func WaterStateOf(lastWatered, lastChecked *time.Time, intervalDays, ahead int, 
 // ---------- подкормка ----------
 
 type Fertilizer struct {
-	ID                             int
-	IntervalDaysActiveSeason       int
-	IntervalDaysDormantSeason      *int
+	ID                           int
+	Name                         string
+	NPK                          string
+	RootDoseMlPerL               *float64
+	FoliarDoseMlPerL             *float64
+	IntervalDaysActiveSeason     int
+	IntervalDaysDormantSeason    *int
 }
 
 func SeasonInterval(ft Fertilizer, season string) *int {

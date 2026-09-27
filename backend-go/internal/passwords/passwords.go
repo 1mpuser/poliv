@@ -83,7 +83,7 @@ func GeneratePassword(length int) (string, error) {
 		if _, err := rand.Read(b); err != nil {
 			return "", err
 		}
-		out[i] = Alphabet[int(b[0])<<8+int(b[1])%len(Alphabet)]
+		out[i] = Alphabet[(int(b[0])<<8+int(b[1]))%len(Alphabet)]
 	}
 	return string(out), nil
 }
