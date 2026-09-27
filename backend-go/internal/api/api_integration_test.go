@@ -19,6 +19,7 @@ import (
 	"poliv/internal/light"
 	"poliv/internal/migrate"
 	"poliv/internal/passwords"
+	"poliv/internal/summary"
 	"poliv/internal/yandex"
 )
 
@@ -1635,3 +1636,53 @@ func TestPauseIgnoresExpiredFlag(t *testing.T) {
 	lampGet, _ = testSrv.Lamps.GetLamp(context.Background(), lampID)
 	_ = testSrv.Lamps.Archive(context.Background(), lampGet, at(11, 30))
 }
+
+// TestWeeklySunshineIncludesToday — в текущей неделе sunshine_hours включает сегодняшний день
+// (Python-референс фильтрует d <= today). Регрессия: в Go было d.Before(today) — день
+// сегодняшнего дня выпадал из текущей недели, и статистика занижалась.
+func TestWeeklySunshineIncludesToday(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+	now := time.Now().In(zoneLoc)
+	today := summary.LocalDate(now, zoneLoc)
+	weekStart := summary.DateAddDays(today, -((int(today.Weekday())+6)%7))
+
+	days := []summary.Date{
+		today,
+		summary.DateAddDays(today, -1),
+		summary.DateAddDays(today, -2),
+	}
+	hours := map[summary.Date]float64{days[0]: 5.0, days[1]: 4.0, days[2]: 3.0}
+	expected := 0.0
+	for _, d := range days {
+		if !d.Before(weekStart) && !d.After(today) {
+			expected += hours[d]
+		}
+		if _, err := testPool.Exec(ctx, `INSERT INTO daylight_days (user_id, day, sunrise, sunset, daylight_hours, sunshine_hours)
+			VALUES (1, $1, $2, $3, 12, $4) ON CONFLICT (user_id, day)
+			DO UPDATE SET sunshine_hours=EXCLUDED.sunshine_hours`,
+			d, d.Add(9*time.Hour), d.Add(17*time.Hour), hours[d]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var stats []map[string]any
+	if code := getJSON(t, "/api/plants/1/stats/weekly?weeks=8", adminToken(t), &stats); code != 200 {
+		t.Fatalf("weekly -> %d", code)
+	}
+	if len(stats) == 0 {
+		t.Fatal("weekly: пустой ответ")
+	}
+	current := stats[len(stats)-1]
+	if cur, ok := current["is_current"].(bool); !ok || !cur {
+		t.Fatalf("последняя неделя не текущая: %v", current)
+	}
+	got, ok := current["sunshine_hours"].(float64)
+	if !ok {
+		t.Fatalf("sunshine_hours: %T", current["sunshine_hours"])
+	}
+	want := float64(int(expected*10+0.5)) / 10
+	if got != want {
+		t.Fatalf("sunshine_hours текущей недели: %v, ждём %v (сегодняшний день должен считаться)", got, want)
+	}
+}
+

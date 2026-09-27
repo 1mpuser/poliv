@@ -571,7 +571,8 @@ func (s *Service) Weekly(ctx context.Context, userID, plantID, weeks int) ([]sch
 	}
 	filtered := map[summary.Date]float64{}
 	for d, h := range sunshine {
-		if d.Before(today) {
+		// как Python-референс: d <= today — сегодняшний день уже случился и считается
+		if !d.After(today) {
 			filtered[d] = h
 		}
 	}
