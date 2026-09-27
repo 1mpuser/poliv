@@ -52,17 +52,7 @@ func TestMain(m *testing.M) {
 	zone, _ := time.LoadLocation("Europe/Moscow")
 	testPool = pool
 	testSrv = New(pool, zone, "test-secret", 30)
-
-	// сеть (Яндекс, Open-Meteo) в тестах не трогаем — по умолчанию заглушки
-	testSrv.Lamps.YandexListDevices = func(token string) ([]yandex.Device, error) { return nil, nil }
-	testSrv.Lamps.YandexSetOn = func(token, dev string, on bool) error { return nil }
-
-	hash, _ := passwords.HashPassword("owner-pass-1")
-	if _, err := pool.Exec(context.Background(),
-		`UPDATE users SET email='owner@example.com', password_hash=$1, is_admin=true, blocked_at=NULL, token_version=1 WHERE id=1`, hash); err != nil {
-		fmt.Fprintln(os.Stderr, "set owner:", err)
-		os.Exit(1)
-	}
+	setDefaultOverrides()
 
 	ts := httptest.NewServer(testSrv.Handler())
 	testBase = ts.URL
@@ -73,11 +63,52 @@ func TestMain(m *testing.M) {
 
 // ---------- helpers ----------
 
+// setDefaultOverrides — внешние вызовы (Яндекс, Open-Meteo) в тестах заглушены по умолчанию.
+func setDefaultOverrides() {
+	testSrv.Lamps.YandexListDevices = func(token string) ([]yandex.Device, error) { return nil, nil }
+	testSrv.Lamps.YandexSetOn = func(token, dev string, on bool) error { return nil }
+	light.FetchDays = func(lat, lon float64, tz *time.Location) ([]light.DayRow, error) { return nil, nil }
+}
+
+// resetTestDB — начальное состояние полiv_test к началу каждого теста,
+// как в фикстуре Python (пересоздание) — владелец-админ, лимон, лайм, два удобрения.
+func resetTestDB(t *testing.T) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := testPool.Exec(ctx, `TRUNCATE users, plants, fertilizer_types, watering_logs, soil_checks,
+		feeding_logs, repotting_logs, lamps, plant_lamps, lamp_sessions, lamp_schedules, daylight_days, user_settings
+		RESTART IDENTITY CASCADE`); err != nil {
+		t.Fatalf("reset db: %v", err)
+	}
+	hash, err := passwords.HashPassword("owner-pass-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `INSERT INTO users (email, password_hash, is_admin, token_version)
+		VALUES ('owner@example.com', $1, true, 1)`, hash); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `INSERT INTO plants (user_id, name, species, water_interval_days, light_target_hours)
+		VALUES (1, 'Лимон', 'Лимон Мейера', 4, 12), (1, 'Лайм', 'Лайм', 3, 12)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `INSERT INTO fertilizer_types (user_id, name, interval_days_active_season, interval_days_dormant_season)
+		VALUES (1, 'Lomonosoff', 14, 30), (1, 'Bona Forte', 14, 30)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `INSERT INTO user_settings (user_id) VALUES (1)`); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func requireDB(t *testing.T) {
 	t.Helper()
 	if os.Getenv("TEST_DATABASE_URL") == "" {
 		t.Skip("TEST_DATABASE_URL не задан")
 	}
+	resetTestDB(t)
+	setDefaultOverrides()
+	t.Cleanup(setDefaultOverrides)
 }
 
 func req(t *testing.T, method, path string, body any, token string) *http.Response {
@@ -337,7 +368,13 @@ func TestAdminEndpointsHiddenFromUsers(t *testing.T) {
 func TestAdminCreateValidation(t *testing.T) {
 	requireDB(t)
 	admin := adminToken(t)
-	resp := req(t, "POST", "/api/admin/users", map[string]any{"email": "A@EXAMPLE.com", "password": "12345678"}, admin)
+	// дубликат (без регистра) проверяем самим, а не зависимостью от порядка тестов
+	resp := req(t, "POST", "/api/admin/users", map[string]any{"email": "dup@example.com", "password": "12345678"}, admin)
+	if resp.StatusCode != 201 {
+		t.Fatalf("create dup -> %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+	resp = req(t, "POST", "/api/admin/users", map[string]any{"email": "DUP@example.com", "password": "12345678"}, admin)
 	if resp.StatusCode != 409 {
 		t.Fatalf("dup -> %d", resp.StatusCode)
 	}
@@ -570,25 +607,46 @@ func TestSoilCheckForeign404(t *testing.T) {
 	resp.Body.Close()
 }
 
-func windowAroundNow(t *testing.T) (string, string) {
-	zone, _ := time.LoadLocation("Europe/Moscow")
-	now := time.Now().In(zone)
+// windowAround — окно ±1 ч вокруг now, зажатое в рамки текущего дня: не раньше 00:00 и не позже 23:59.
+func windowAround(now time.Time, loc *time.Location) (time.Time, time.Time) {
+	day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	dayEnd := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 0, 0, loc)
 	start := now.Add(-time.Hour)
-	if start.Hour() == 0 && start.Minute() == 0 && start.Second() == 0 {
-		start = now.Add(-time.Hour)
+	if start.Before(day) {
+		start = day
 	}
 	end := now.Add(time.Hour)
-	if end.Hour() == 23 {
-		end = now
+	if end.After(dayEnd) {
+		end = dayEnd
 	}
-	if start.Hour() == 0 {
-		start = now
-	}
-	// не через полночь
-	if end.Hour() < start.Hour() {
-		end = start.Add(30 * time.Minute)
-	}
+	return start, end
+}
+
+func windowAroundNow(t *testing.T) (string, string) {
+	t.Helper()
+	now := time.Now().In(zoneLoc)
+	start, end := windowAround(now, zoneLoc)
 	return start.Format("15:04"), end.Format("15:04")
+}
+
+func TestWindowAround(t *testing.T) {
+	loc := zoneLoc
+	cases := []struct {
+		h, m                  int
+		wantStart, wantEnd    time.Time
+	}{
+		{0, 10, time.Date(2026, 9, 27, 0, 0, 0, 0, loc), time.Date(2026, 9, 27, 1, 10, 0, 0, loc)},
+		{12, 0, time.Date(2026, 9, 27, 11, 0, 0, 0, loc), time.Date(2026, 9, 27, 13, 0, 0, 0, loc)},
+		{22, 30, time.Date(2026, 9, 27, 21, 30, 0, 0, loc), time.Date(2026, 9, 27, 23, 30, 0, 0, loc)},
+		{23, 50, time.Date(2026, 9, 27, 22, 50, 0, 0, loc), time.Date(2026, 9, 27, 23, 59, 0, 0, loc)},
+	}
+	for _, c := range cases {
+		now := time.Date(2026, 9, 27, c.h, c.m, 0, 0, loc)
+		s, e := windowAround(now, loc)
+		if !s.Equal(c.wantStart) || !e.Equal(c.wantEnd) {
+			t.Errorf("%02d:%02d -> [%v,%v], want [%v,%v]", c.h, c.m, s, e, c.wantStart, c.wantEnd)
+		}
+	}
 }
 
 func TestScheduleLampLightsItsPlantsAndToggleEndsIt(t *testing.T) {
@@ -772,9 +830,6 @@ func TestPauseOffLampIs409(t *testing.T) {
 // ---------- авто-досветка (над DB, сеть не трогаем) ----------
 
 func autoLampSetup(t *testing.T, day time.Time) (int, int, string, func(h, m int) time.Time) {
-	light.FetchDays = func(lat, lon float64, tz *time.Location) ([]light.DayRow, error) { return nil, nil }
-	testSrv.Lamps.YandexSetOn = func(token, dev string, on bool) error { return nil }
-	testSrv.Lamps.YandexListDevices = func(token string) ([]yandex.Device, error) { return nil, nil }
 	admin := adminToken(t)
 	uid, tok := makeUser(t, admin, fmt.Sprintf("autolamp%d@example.com", day.Unix()), "user-pass-1")
 	var lemon map[string]any
@@ -959,9 +1014,6 @@ func setPlugCalls(calls *[]plugCall) {
 // createAutoLamp — учётка + растение (норма 12ч) + город + токен + авто-лампа с розеткой,
 // и свет за день (восход 9:00, закат 16:30, солнце 2ч). Возвращает uid, lampID, токен, at().
 func createAutoLamp(t *testing.T, day time.Time, device string) (int, int, string, func(int, int) time.Time) {
-	light.FetchDays = func(lat, lon float64, tz *time.Location) ([]light.DayRow, error) { return nil, nil }
-	testSrv.Lamps.YandexSetOn = func(token, dev string, on bool) error { return nil }
-	testSrv.Lamps.YandexListDevices = func(token string) ([]yandex.Device, error) { return nil, nil }
 	admin := adminToken(t)
 	uid, tok := makeUser(t, admin, fmt.Sprintf("autolamp-%s-%d@example.com", device, day.Year()), "user-pass-1")
 	var lemon map[string]any
@@ -1199,7 +1251,6 @@ func TestAutoLampPlansDaytimePart(t *testing.T) {
 	_, lampID, _, at := createAutoLamp(t, day, "dev-2")
 	var calls []plugCall
 	setPlugCalls(&calls)
-	lightFetchDaysOff()
 
 	_ = testSrv.Lamps.Tick(context.Background(), at(14, 0))
 	plan := autoPlan(t, lampID)
@@ -1210,10 +1261,6 @@ func TestAutoLampPlansDaytimePart(t *testing.T) {
 	if len(calls) != 1 || calls[0].dev != "dev-2" || calls[0].on != true {
 		t.Fatalf("calls %v", calls)
 	}
-}
-
-func lightFetchDaysOff() {
-	// гарантируем отсутствие сети в тестах света
 }
 
 func TestPlugErrorsAndArchive(t *testing.T) {
@@ -1296,7 +1343,6 @@ func TestAutoLampPauseSurvivesTick(t *testing.T) {
 	_, lampID, _, at := createAutoLamp(t, day, "dev-1")
 	var calls []plugCall
 	setPlugCalls(&calls)
-	lightFetchDaysOff()
 
 	lamp, err := testSrv.Lamps.GetLamp(context.Background(), lampID)
 	if err != nil {
@@ -1364,7 +1410,6 @@ func TestAutoLampResumeEarlyShiftsEnd(t *testing.T) {
 	_, lampID, _, at := createAutoLamp(t, day, "dev-2")
 	var calls []plugCall
 	setPlugCalls(&calls)
-	lightFetchDaysOff()
 
 	lamp, _ := testSrv.Lamps.GetLamp(context.Background(), lampID)
 	_ = testSrv.Lamps.Tick(context.Background(), at(5, 0))
@@ -1445,7 +1490,6 @@ func autoPlusManualSetup(t *testing.T, day time.Time, device string) (int, *[]pl
 	_, lampID, _, at := createAutoLamp(t, day, device)
 	calls := []plugCall{}
 	setPlugCalls(&calls)
-	lightFetchDaysOff()
 	lamp, _ := testSrv.Lamps.GetLamp(context.Background(), lampID)
 	_ = testSrv.Lamps.Tick(context.Background(), at(5, 0))
 	_, _ = testSrv.Lamps.Toggle(context.Background(), lamp, at(5, 30))
