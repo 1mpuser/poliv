@@ -535,3 +535,44 @@ body:has(.login) { padding-bottom: 0; }
 .lamp-plants legend { font-size: 13px; color: var(--ink-2); margin-bottom: 4px; }
 .fert-form label.check { display: flex; align-items: center; gap: 10px; min-height: 44px; font-size: 15px; color: var(--ink); }
 .check input { width: 20px; height: 20px; accent-color: var(--accent); }
+
+/* ---------- Установленное приложение и узкие экраны (320px) ---------- */
+
+/* В standalone (после установки) контент уходит под статус-бар: компенсация safe area */
+@media (display-mode: standalone) {
+  .page-head { padding-top: calc(20px + env(safe-area-inset-top)); }
+  .login { padding-top: calc(var(--gutter) + env(safe-area-inset-top)); }
+}
+
+/* Четыре действия в ряд на 320–380px не проходят: «Подкормить»/«Проверил» — слова без
+   переноса, min-content трека шире карточки, и страница уходит в горизонтальную прокрутку.
+   Ниже 380px — сетка 2×2. */
+@media (max-width: 380px) {
+  .actions { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* Длинные названия (растения, удобрения, лампы) переносятся внутри контейнера, а не вылезают из него */
+.plant-card__head > span { min-width: 0; }
+.hero > div { min-width: 0; }
+.tl-item { grid-template-columns: 44px minmax(0, 1fr) auto; }
+.plant-card__name, .plant-card__place, .hero__name, .tl-title, .tl-note,
+.fert-item__meta, .field__label, .field__hint, .chip { overflow-wrap: anywhere; }
+.date-range .input { min-width: 0; }
+
+/* Сетки не расширяются собственным min-content полей: у input/select есть внутренняя
+   ширина (~size=20), которая на 320px выталкивает колонки за карточку */
+.fert-form { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.fert-form > * { min-width: 0; }
+.lamp-plants .check span { overflow-wrap: anywhere; }
+.sheet__body > * { min-width: 0; }
+.sheet__title { overflow-wrap: anywhere; }
+
+/* Чипы ламп на дашборде — flex-элементы, без ограничения берут max-content (ширину названия) */
+.toolbar .chip { max-width: 100%; }
+
+/* Сегментированный переключатель: длинное название растения — слово без пробелов */
+.segmented button { overflow-wrap: anywhere; }
+
+/* Строка удобрения/лампы: при трёх кнопках на узком экране кнопки уходят вниз,
+   а название не сжимается до нуля */
+.fert-item { flex-wrap: wrap; }

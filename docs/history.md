@@ -81,3 +81,16 @@
   сервис по-прежнему `backend` с алиасом `poliv-api`, порт 8000, те же env (принимает и префикс `+psycopg`).
 - CLI в том же бинарнике: `set-owner` / `create-user` / `reset-password` / `make-admin`.
 - Память (docker stats, простои): Python ~74 MiB → Go ~6 MiB (после прогона запросов ~9 MiB).
+
+### 2026-09-27 — устанавливаемое приложение на телефон
+- Веб-манифест `frontend/public/manifest.webmanifest` (standalone, «Поливалка», цвета из светлой темы),
+  иконки PNG 192/512 + maskable, сгенерированные из `icon.svg`; в `index.html` — manifest-ссылка и
+  iOS-meta (apple-mobile-web-app-capable/title/status-bar-style). nginx отдаёт манифест как
+  `application/manifest+json` отдельным location (без SPA-fallback). Service worker и офлайн-кэш
+  намеренно нет: `/api` кэшироваться не должен.
+- Вёрстка на 320/360px (проверено headless Chrome, CDP, `scrollWidth <= clientWidth` на всех экранах
+  с намеренно длинными названиями): действия в карточке — 2×2 ниже 380px; длинные слова не вылезают
+  (`overflow-wrap: anywhere` у названий, меток, чипов, заголовка шторки); сетки с полями —
+  `minmax(0, 1fr)` (внутренняя ширина input выталкивала форму удобрения за карточку); чипы ламп на
+  дашборде ограничены `max-width: 100%`; строка удобрения/лампы с тремя кнопками переносит кнопки вниз;
+  в standalone шапка и экран входа сдвинуты на `env(safe-area-inset-top)`.
