@@ -531,3 +531,214 @@ def test_location_fetches_daylight(client, admin, monkeypatch):
     # Тот же город повторно — без лишнего запроса
     client.patch("/api/settings", json={"location_name": "Мытищи", "latitude": 55.91, "longitude": 37.73}, headers=auth(t))
     assert len(calls) == 1
+
+
+# ---------- проверка грунта ----------
+def test_soil_check_crud_and_status_reset(client, admin):
+    _, t = make_user(client, admin, "check@example.com")
+    plant = client.post("/api/plants", json={"name": "Грунт"}, headers=auth(t)).json()
+    pid = plant["id"]
+
+    # не поливали и не проверяли — «пора»
+    assert client.get(f"/api/plants/{pid}/summary", headers=auth(t)).json()["water"]["status"] == "late"
+
+    r = client.post(f"/api/plants/{pid}/checks", headers=auth(t))
+    assert r.status_code == 201
+    check = r.json()
+    assert check["plant_id"] == pid and check["id"]
+
+    s = client.get(f"/api/plants/{pid}/summary", headers=auth(t)).json()["water"]
+    assert s["status"] == "ok" and s["last_check_at"] is not None
+    assert s["days_since"] is None and s["days_since_check"] == 0
+    assert s["interval_days"] == 4
+
+    ev = client.get(f"/api/plants/{pid}/history?types=check", headers=auth(t)).json()
+    assert ev and ev[0]["type"] == "check" and ev[0]["at"] == check["checked_at"]
+
+    # «Отменить» — проверка удаляется, счётчик снова «пора»
+    assert client.delete(f"/api/checks/{check['id']}", headers=auth(t)).status_code == 204
+    assert client.get(f"/api/plants/{pid}/summary", headers=auth(t)).json()["water"]["status"] == "late"
+    assert client.get(f"/api/plants/{pid}/history?types=check", headers=auth(t)).json() == []
+
+
+def test_soil_check_foreign_404(client, admin):
+    _, a = make_user(client, admin, "ca@example.com")
+    _, b = make_user(client, admin, "cb@example.com")
+    plant_a = client.post("/api/plants", json={"name": "PA"}, headers=auth(a)).json()
+    check_a = client.post(f"/api/plants/{plant_a['id']}/checks", headers=auth(a)).json()
+
+    assert client.post(f"/api/plants/{plant_a['id']}/checks", headers=auth(b)).status_code == 404
+    assert client.delete(f"/api/checks/{check_a['id']}", headers=auth(b)).status_code == 404
+    # своё — можно
+    assert client.post(f"/api/plants/{plant_a['id']}/checks", headers=auth(a)).status_code == 201
+
+
+# ---------- пауза лампы ----------
+def test_auto_lamp_pause_survives_tick(client, admin, monkeypatch):
+    from datetime import date, datetime
+
+    from sqlalchemy import select
+
+    from app.config import settings
+    from app.db import SessionLocal
+    from app.models import DaylightDay, Lamp, LampSession, LampSource
+    from app.services import lamps, light, yandex
+
+    tz = settings.zone
+    day = date(2032, 1, 15)
+
+    def at(h, m=0):
+        return datetime(2032, 1, 15, h, m, tzinfo=tz)
+
+    calls = []
+    monkeypatch.setattr(light, "fetch_days", lambda lat, lon: [])
+    monkeypatch.setattr(yandex, "list_devices", lambda token: [])
+    monkeypatch.setattr(yandex, "set_on", lambda token, dev, on: calls.append((dev, on)))
+
+    uid, t = make_user(client, admin, "pausea@example.com")
+    lemon = client.post("/api/plants", json={"name": "Лимон", "light_target_hours": 12}, headers=auth(t)).json()
+    client.patch("/api/settings", json={"location_name": "Москва", "latitude": 55.75, "longitude": 37.62}, headers=auth(t))
+    client.put("/api/settings/yandex-token", json={"token": "y0_test-token-123"}, headers=auth(t))
+    lamp_id = client.post(
+        "/api/lamps",
+        json={"name": "Лампа цитрусы", "mode": "auto", "device_id": "dev-1", "device_name": "Розетка",
+              "plant_ids": [lemon["id"]]},
+        headers=auth(t),
+    ).json()["id"]
+
+    def auto(db):
+        q = select(LampSession).where(
+            LampSession.lamp_id == lamp_id, LampSession.source == LampSource.auto
+        ).order_by(LampSession.started_at)
+        return db.scalars(q).all()
+
+    with SessionLocal() as db:
+        db.merge(DaylightDay(user_id=uid, day=day, sunrise=at(9), sunset=at(16, 30), daylight_hours=7.5, sunshine_hours=2.0))
+        db.commit()
+        calls.clear()
+
+        lamps.tick(db, now=at(5))
+        lamps.tick(db, now=at(6, 30))
+        assert calls[-1] == ("dev-1", True)
+
+        # пауза в 6:30: утро режется, розетке «выкл», хвост [6:40, 9:10]
+        lamps.pause(db, db.get(Lamp, lamp_id), at(6, 30))
+        assert calls[-1] == ("dev-1", False)
+        assert db.get(Lamp, lamp_id).paused_until == at(6, 40)
+        assert any(s.after_pause and s.started_at == at(6, 40) and s.ended_at == at(9, 10) for s in auto(db))
+
+        # tick во время паузы не удаляет хвост (replan_auto сохраняет after_pause)
+        lamps.tick(db, now=at(6, 31))
+        assert db.get(Lamp, lamp_id).paused_until == at(6, 40)
+        assert any(s.after_pause and s.started_at == at(6, 40) and s.ended_at == at(9, 10) for s in auto(db))
+        assert calls[-1] == ("dev-1", False)
+
+        # пауза кончилась — следующий tick включает лампу
+        lamps.tick(db, now=at(6, 40))
+        assert db.get(Lamp, lamp_id).paused_until is None
+        assert calls[-1] == ("dev-1", True)
+
+        lamps.archive(db, db.get(Lamp, lamp_id), at(7))
+
+
+def test_auto_lamp_resume_early_shifts_end(client, admin, monkeypatch):
+    from datetime import date, datetime
+
+    from sqlalchemy import select
+
+    from app.config import settings
+    from app.db import SessionLocal
+    from app.models import DaylightDay, Lamp, LampSession, LampSource
+    from app.services import lamps, light, yandex
+
+    tz = settings.zone
+    day = date(2033, 1, 15)
+
+    def at(h, m=0):
+        return datetime(2033, 1, 15, h, m, tzinfo=tz)
+
+    calls = []
+    monkeypatch.setattr(light, "fetch_days", lambda lat, lon: [])
+    monkeypatch.setattr(yandex, "list_devices", lambda token: [])
+    monkeypatch.setattr(yandex, "set_on", lambda token, dev, on: calls.append((dev, on)))
+
+    uid, t = make_user(client, admin, "pauseb@example.com")
+    lemon = client.post("/api/plants", json={"name": "Лимон", "light_target_hours": 12}, headers=auth(t)).json()
+    client.patch("/api/settings", json={"location_name": "Москва", "latitude": 55.75, "longitude": 37.62}, headers=auth(t))
+    client.put("/api/settings/yandex-token", json={"token": "y0_test-token-123"}, headers=auth(t))
+    lamp_id = client.post(
+        "/api/lamps",
+        json={"name": "Лампа цитрусы", "mode": "auto", "device_id": "dev-2", "device_name": "Розетка",
+              "plant_ids": [lemon["id"]]},
+        headers=auth(t),
+    ).json()["id"]
+
+    with SessionLocal() as db:
+        db.merge(DaylightDay(user_id=uid, day=day, sunrise=at(9), sunset=at(16, 30), daylight_hours=7.5, sunshine_hours=2.0))
+        db.commit()
+        calls.clear()
+
+        lamps.tick(db, now=at(5))
+        lamps.tick(db, now=at(6, 30))
+        # пауза, затем «Продолжить» раньше срока
+        lamps.pause(db, db.get(Lamp, lamp_id), at(6, 30))
+        lamps.resume(db, db.get(Lamp, lamp_id), at(6, 35))
+
+        lamp = db.get(Lamp, lamp_id)
+        assert lamp.paused_until is None
+        tails = [
+            s for s in db.scalars(
+                select(LampSession).where(LampSession.lamp_id == lamp_id, LampSession.after_pause.is_(True))
+            )
+        ]
+        assert tails and tails[-1].started_at == at(6, 35) and tails[-1].ended_at == at(9, 5)
+        assert calls[-1] == ("dev-2", True)
+
+        lamps.archive(db, db.get(Lamp, lamp_id), at(7))
+
+
+def test_manual_lamp_pause_resumes_by_tick(client, admin, monkeypatch):
+    from datetime import datetime, timedelta
+
+    from app.db import SessionLocal
+    from app.models import Lamp
+    from app.services import lamps, yandex
+
+    calls = []
+    monkeypatch.setattr(yandex, "list_devices", lambda token: [])
+    monkeypatch.setattr(yandex, "set_on", lambda token, dev, on: calls.append((dev, on)))
+
+    _, t = make_user(client, admin, "pausem@example.com")
+    plant = client.post("/api/plants", json={"name": "P"}, headers=auth(t)).json()
+    client.put("/api/settings/yandex-token", json={"token": "y0_test-token-123"}, headers=auth(t))
+    lamp_id = client.post(
+        "/api/lamps",
+        json={"name": "M", "mode": "manual", "device_id": "dev-m", "device_name": "Розетка",
+              "plant_ids": [plant["id"]]},
+        headers=auth(t),
+    ).json()["id"]
+
+    client.post(f"/api/lamps/{lamp_id}/toggle", headers=auth(t))
+    assert calls[-1] == ("dev-m", True)
+
+    r = client.post(f"/api/lamps/{lamp_id}/pause", headers=auth(t))
+    assert r.status_code == 200
+    lamp = r.json()
+    assert lamp["is_on"] is False and lamp["paused_until"] is not None
+    assert calls[-1] == ("dev-m", False)
+
+    resume_at = datetime.fromisoformat(lamp["paused_until"]) + timedelta(minutes=1)
+    with SessionLocal() as db:
+        lamps.tick(db, now=resume_at)
+        assert db.get(Lamp, lamp_id).paused_until is None
+        assert calls[-1] == ("dev-m", True)
+        lamps.archive(db, db.get(Lamp, lamp_id), resume_at)
+
+
+def test_pause_off_lamp_is_409(client, admin):
+    _, t = make_user(client, admin, "pauseoff@example.com")
+    plant = client.post("/api/plants", json={"name": "P"}, headers=auth(t)).json()
+    lamp = client.post("/api/lamps", json={"name": "L", "plant_ids": [plant["id"]]}, headers=auth(t)).json()
+
+    assert client.post(f"/api/lamps/{lamp['id']}/pause", headers=auth(t)).status_code == 409
+    assert client.delete(f"/api/lamps/{lamp['id']}/pause", headers=auth(t)).status_code == 409

@@ -15,6 +15,7 @@ from app.models import (
     Lamp,
     Plant,
     RepottingLog,
+    SoilCheck,
     User,
     UserSettings,
     WateringLog,
@@ -82,7 +83,8 @@ def build_summary(
     ahead = app.notify_days_ahead
 
     last_water = db.scalar(select(func.max(WateringLog.watered_at)).where(WateringLog.plant_id == plant.id))
-    water = rules.water_state(last_water, plant.water_interval_days, ahead, now, tz)
+    last_check = db.scalar(select(func.max(SoilCheck.checked_at)).where(SoilCheck.plant_id == plant.id))
+    water = rules.water_state(last_water, last_check, plant.water_interval_days, ahead, now, tz)
 
     last_feed = db.scalars(
         select(FeedingLog).where(FeedingLog.plant_id == plant.id).order_by(FeedingLog.fed_at.desc()).limit(1)
@@ -116,6 +118,8 @@ def build_summary(
         water=schemas.WaterSummary(
             last_at=last_water,
             days_since=water.days_since,
+            last_check_at=last_check,
+            days_since_check=water.days_since_check,
             interval_days=plant.water_interval_days,
             due_in_days=water.due_in_days,
             status=water.status,
@@ -184,6 +188,11 @@ def history(
             select(WateringLog).where(WateringLog.plant_id == plant_id, *in_range(WateringLog.watered_at))
         ):
             events.append(schemas.HistoryEvent(type="water", id=w.id, at=w.watered_at, note=w.note))
+    if "check" in types:
+        for c in db.scalars(
+            select(SoilCheck).where(SoilCheck.plant_id == plant_id, *in_range(SoilCheck.checked_at))
+        ):
+            events.append(schemas.HistoryEvent(type="check", id=c.id, at=c.checked_at))
     if "feed" in types:
         for f in db.scalars(
             select(FeedingLog).where(FeedingLog.plant_id == plant_id, *in_range(FeedingLog.fed_at))

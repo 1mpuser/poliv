@@ -92,6 +92,12 @@ class WateringOut(ORM):
     note: str | None
 
 
+class SoilCheckOut(ORM):
+    id: int
+    plant_id: int
+    checked_at: datetime
+
+
 class FeedingCreate(BaseModel):
     plant_id: int
     fertilizer_type_id: int
@@ -196,6 +202,7 @@ class LampOut(LampFields):
     last_state: bool | None
     last_error: str | None
     last_error_at: datetime | None
+    paused_until: datetime | None
     plant_ids: list[int]
     is_on: bool
     schedule: list[ScheduleInterval]
@@ -210,6 +217,7 @@ class LampBrief(BaseModel):
     mode: LampMode
     is_on: bool
     has_device: bool
+    paused_until: datetime | None
     planned: list[PlannedInterval]
     last_error: str | None
 
@@ -289,10 +297,12 @@ class DaylightOut(ORM):
 
 # ---------- Сводка ----------
 class WaterSummary(BaseModel):
-    last_at: datetime | None
-    days_since: int | None
+    last_at: datetime | None          # последний полив
+    days_since: int | None            # дней с полива
+    last_check_at: datetime | None    # последняя проверка грунта
+    days_since_check: int | None      # дней с проверки
     interval_days: int
-    due_in_days: int
+    due_in_days: int                  # до срока по последнему касанию (полив или проверка)
     status: Status
 
 
@@ -354,7 +364,7 @@ class PlantSummary(BaseModel):
 
 
 # ---------- История и статистика ----------
-EventType = Literal["water", "feed", "lamp", "repot"]
+EventType = Literal["water", "feed", "lamp", "repot", "check"]
 
 
 class HistoryEvent(BaseModel):

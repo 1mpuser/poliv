@@ -68,7 +68,7 @@ def plant_history(
     date_to: date | None = None,
 ):
     plant = crud.owned_plant(db, user, plant_id)
-    wanted = set(types or ["water", "feed", "lamp", "repot"])
+    wanted = set(types or ["water", "check", "feed", "lamp", "repot"])
     return svc.history(db, plant, wanted, date_from, date_to)
 
 

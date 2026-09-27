@@ -30,8 +30,8 @@ PATCH меняет только переданные поля; явный `null`
 | GET / POST | `/plants` | Список / создать |
 | GET | `/plants/summary` | **Сводки всех растений одним запросом** (дашборд) |
 | GET / PATCH / DELETE | `/plants/{id}` | |
-| GET | `/plants/{id}/summary` | Сводка: `water`, `feed` (следующее удобрение и срок), `lamp` (часы сегодня), `repot` |
-| GET | `/plants/{id}/history` | Лента событий; `?types=water&types=feed`, `date_from`, `date_to` (YYYY-MM-DD) |
+| GET | `/plants/{id}/summary` | Сводка: `water` (последний полив и проверка грунта, статус по последнему касанию), `feed` (следующее удобрение и срок), `lamp` (часы сегодня), `repot` |
+| GET | `/plants/{id}/history` | Лента событий; `?types=water&types=check`, `date_from`, `date_to` (YYYY-MM-DD) |
 | GET | `/plants/{id}/stats/weekly` | `?weeks=8` (1–52): поливы, подкормки, часы лампы по неделям |
 
 ## Журналы
@@ -41,6 +41,7 @@ PATCH меняет только переданные поля; явный `null`
 | X | Тело POST | |
 |---|---|---|
 | `waterings` | `{plant_id, watered_at?, note?}` | время по умолчанию — сейчас |
+| `checks` | `POST /plants/{id}/checks` (пусто, 201 → `{id, plant_id, checked_at}`) · `DELETE /checks/{id}` | «проверил грунт» — сбрасывает счётчик растения |
 | `feedings` | `{plant_id, fertilizer_type_id, method: root\|foliar, fed_at?, note?}` | |
 | `repottings` | `{plant_id, repotted_at?, pot_size_before?, pot_size_after?, note?}` | обновляет `pot_size_l` растения |
 
@@ -64,6 +65,8 @@ PATCH меняет только переданные поля; явный `null`
 | GET / PATCH / DELETE | `/lamps/{id}` | PATCH — поля как в POST, `plant_ids` — полная замена; DELETE — в архив (история сохраняется) |
 | PUT | `/lamps/{id}/schedule` | `{intervals}` — только в режиме `schedule`; пересечения/конец раньше начала — 400 |
 | POST | `/lamps/{id}/toggle` | Кнопка лампы; ответ как у `/lamp-sessions/toggle` + `plug_error` |
+| POST | `/lamps/{id}/pause` | Пауза 10 мин: лампа гаснет, хвост продолжит сессию; лампа не горит — 409; повторная — продлевает паузу |
+| DELETE | `/lamps/{id}/pause` | «Продолжить» раньше срока: хвост с `now`, конец сдвигается (auto); не на паузе — 409 |
 | PUT | `/plants/{id}/lamp` | `{lamp_id или null}` — перенести растение |
 | GET | `/yandex/devices` | Устройства Умного дома с вкл/выкл; без токена — 400 |
 | PUT | `/settings/yandex-token` | `{token или null}` — проверяется у Яндекса; токен в ответах не возвращается, в `GET /settings` — `yandex_status` |

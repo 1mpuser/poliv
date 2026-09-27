@@ -3,11 +3,12 @@ import { api } from '../api';
 import { dayLabel, fmtHours, fmtNumber, fmtTime } from '../format';
 import type { EventType, HistoryEvent } from '../types';
 import { useAsync } from '../useAsync';
-import { Icon } from './icons';
+import { Icon, type IconName } from './icons';
 
 const FILTERS: { value: EventType | 'all'; label: string }[] = [
   { value: 'all', label: 'Все' },
   { value: 'water', label: 'Полив' },
+  { value: 'check', label: 'Проверка грунта' },
   { value: 'feed', label: 'Подкормка' },
   { value: 'lamp', label: 'Лампа' },
   { value: 'repot', label: 'Пересадка' },
@@ -18,6 +19,8 @@ function describe(e: HistoryEvent): { title: string; note: string } {
   switch (e.type) {
     case 'water':
       return { title: 'Полив', note: extra.join('') };
+    case 'check':
+      return { title: 'Проверка грунта', note: extra.join('') };
     case 'feed':
       return {
         title: 'Подкормка',
@@ -39,6 +42,14 @@ function describe(e: HistoryEvent): { title: string; note: string } {
     }
   }
 }
+
+const ICON: Record<EventType, IconName> = {
+  water: 'water',
+  check: 'leaf',
+  feed: 'feed',
+  lamp: 'lamp',
+  repot: 'repot',
+};
 
 /** Лента всех событий растения с фильтром по типу и диапазону дат. version — повод перезапросить. */
 export function History({ plantId, version }: { plantId: number; version: number }) {
@@ -62,7 +73,7 @@ export function History({ plantId, version }: { plantId: number; version: number
     const { title, note } = describe(e);
     items.push(
       <li key={`${e.type}-${e.id}`} className="tl-item" data-type={e.type}>
-        <span className="tl-ico"><Icon name={e.type} /></span>
+        <span className="tl-ico"><Icon name={ICON[e.type]} /></span>
         <span>
           <span className="tl-title">{title}</span>
           {note && <><br /><span className="tl-note">{note}</span></>}

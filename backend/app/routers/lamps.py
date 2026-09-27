@@ -114,6 +114,24 @@ def toggle(lamp_id: int, user: CurrentUser, db: DB):
     return toggle_out(db, crud.owned_lamp(db, user, lamp_id))
 
 
+@router.post("/{lamp_id}/pause", response_model=schemas.LampOut)
+def pause(lamp_id: int, user: CurrentUser, db: DB):
+    """Пауза на 10 минут: лампа гаснет, хвост продолжит сессию. Повторная — продлевает паузу."""
+    lamp = crud.owned_lamp(db, user, lamp_id)
+    now = now_utc()
+    svc.pause(db, lamp, now)
+    return svc.lamp_out(db, lamp, now)
+
+
+@router.delete("/{lamp_id}/pause", response_model=schemas.LampOut)
+def resume(lamp_id: int, user: CurrentUser, db: DB):
+    """«Продолжить» раньше срока: хвост начинается с now, неиспользованная пауза сдвигает конец."""
+    lamp = crud.owned_lamp(db, user, lamp_id)
+    now = now_utc()
+    svc.resume(db, lamp, now)
+    return svc.lamp_out(db, lamp, now)
+
+
 @yandex_router.get("/devices", response_model=list[schemas.YandexDevice])
 def devices(user: CurrentUser, db: DB):
     """Устройства Умного дома, которые умеют вкл/выкл, — для выбора розетки лампы."""

@@ -129,6 +129,9 @@ export const api = {
   // Журналы
   water: (plantId: number) => post<{ id: number }>('/waterings', { plant_id: plantId }),
   deleteWatering: (id: number) => del(`/waterings/${id}`),
+  /** Проверка грунта: хозяин потрогал землю и решил, поливать ли. Сбрасывает счётчик. */
+  check: (plantId: number) => post<{ id: number }>(`/plants/${plantId}/checks`),
+  deleteCheck: (id: number) => del(`/checks/${id}`),
   feed: (plantId: number, fertilizerId: number, method: FeedMethod) =>
     post<{ id: number }>('/feedings', { plant_id: plantId, fertilizer_type_id: fertilizerId, method }),
   deleteFeeding: (id: number) => del(`/feedings/${id}`),
@@ -149,6 +152,10 @@ export const api = {
   // Кнопка гасит то, что горит (вручную, по расписанию, досветка), иначе включает вручную
   toggleLamp: (plantId: number) => post<LampToggle>('/lamp-sessions/toggle', { plant_id: plantId }),
   toggleLampById: (lampId: number) => post<LampToggle>(`/lamps/${lampId}/toggle`),
+  /** Пауза 10 мин: лампа гаснет, хвост продолжит сессию. Повторная — продлевает. */
+  pauseLamp: (lampId: number) => post<Lamp>(`/lamps/${lampId}/pause`),
+  /** «Продолжить» раньше срока (то же — отмена из тоста). */
+  resumeLamp: (lampId: number) => request<Lamp>('DELETE', `/lamps/${lampId}/pause`),
   /** Отмена выключения: вернуть прежний конец (null — снова горит вручную) */
   restoreLampEnd: (id: number, endedAt: string | null) => patch<LampSession>(`/lamp-sessions/${id}`, { ended_at: endedAt }),
   deleteLampSession: (id: number) => del(`/lamp-sessions/${id}`),

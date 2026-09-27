@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { api } from '../api';
+import { fmtTime } from '../format';
 import type { Lamp, LampFields, LampMode, Plant } from '../types';
 import { useAsync } from '../useAsync';
 import { Segmented } from './controls';
@@ -43,6 +44,7 @@ function meta(l: Lamp, plants: Plant[]): string {
 export function LampList({ lamps, plants, onChanged }: { lamps: Lamp[]; plants: Plant[]; onChanged: () => void }) {
   const toast = useToast();
   const [editing, setEditing] = useState<number | 'new' | null>(null);
+  const [busyPause, setBusyPause] = useState<number | null>(null);
   const done = () => { setEditing(null); onChanged(); };
 
   async function remove(l: Lamp) {
@@ -52,6 +54,27 @@ export function LampList({ lamps, plants, onChanged }: { lamps: Lamp[]; plants: 
       done();
     } catch {
       toast('Не удалось удалить');
+    }
+  }
+
+  async function pauseLamp(l: Lamp) {
+    setBusyPause(l.id);
+    try {
+      if (l.paused_until) {
+        await api.resumeLamp(l.id);
+        toast('Пауза снята');
+      } else {
+        const lamp = await api.pauseLamp(l.id);
+        toast(`Лампа погасла до ${lamp.paused_until ? fmtTime(lamp.paused_until) : ''}`, async () => {
+          await api.resumeLamp(l.id);
+          onChanged();
+        });
+      }
+      onChanged();
+    } catch {
+      toast('Не удалось поставить лампу на паузу');
+    } finally {
+      setBusyPause(null);
     }
   }
 
@@ -68,6 +91,17 @@ export function LampList({ lamps, plants, onChanged }: { lamps: Lamp[]; plants: 
               <div className="fert-item__meta">{meta(l, plants)}</div>
               {l.last_error && <div className="form-error">Розетка: {l.last_error}</div>}
             </div>
+            {l.device_id && (l.is_on || l.paused_until) && (
+              <button
+                className="btn btn--sm"
+                type="button"
+                aria-pressed={!!l.paused_until}
+                disabled={busyPause === l.id}
+                onClick={() => pauseLamp(l)}
+              >
+                {l.paused_until ? `пауза до ${fmtTime(l.paused_until)}` : 'Пауза 10 мин'}
+              </button>
+            )}
             <button className="btn btn--sm" type="button" onClick={() => setEditing(l.id)}>Изменить</button>
             <button className="btn btn--sm btn--danger" type="button" aria-label={`Удалить ${l.name}`} onClick={() => remove(l)}>✕</button>
           </div>

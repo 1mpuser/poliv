@@ -1,7 +1,7 @@
 export type Status = 'ok' | 'soon' | 'late' | 'off';
 export type Season = 'active' | 'dormant';
 export type FeedMethod = 'root' | 'foliar';
-export type EventType = 'water' | 'feed' | 'lamp' | 'repot';
+export type EventType = 'water' | 'feed' | 'lamp' | 'repot' | 'check';
 
 export interface PlantFields {
   name: string;
@@ -40,6 +40,8 @@ export interface PlantSummary {
   water: {
     last_at: string | null;
     days_since: number | null;
+    last_check_at: string | null;
+    days_since_check: number | null;
     interval_days: number;
     due_in_days: number;
     status: Status;
@@ -96,6 +98,7 @@ export interface Lamp extends LampFields {
   last_state: boolean | null;
   last_error: string | null;
   last_error_at: string | null;
+  paused_until: string | null;
   plant_ids: number[];
   is_on: boolean;
   schedule: ScheduleInterval[];
@@ -109,6 +112,7 @@ export interface LampBrief {
   mode: LampMode;
   is_on: boolean;
   has_device: boolean;
+  paused_until: string | null;
   planned: PlannedInterval[];
   last_error: string | null;
 }

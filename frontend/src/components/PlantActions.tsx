@@ -1,5 +1,6 @@
 import { useState, type CSSProperties } from 'react';
 import { api } from '../api';
+import { fmtTime } from '../format';
 import type { FeedMethod, Fertilizer, PlantSummary } from '../types';
 import { Segmented, Sheet } from './controls';
 import { Icon } from './icons';
@@ -48,7 +49,14 @@ export function PlantActions({ s, fertilizers, onChanged, style }: Props) {
       return { message: 'Полив записан', undo: () => api.deleteWatering(id) };
     });
 
+  const checkSoil = () =>
+    run('check', async () => {
+      const { id } = await api.check(plantId);
+      return { message: 'Проверка записана', undo: () => api.deleteCheck(id) };
+    });
+
   const lampBrief = s.light.lamp;
+  const paused = !!lampBrief?.paused_until;
 
   const lamp = () =>
     run('lamp', async () => {
@@ -58,6 +66,17 @@ export function PlantActions({ s, fertilizers, onChanged, style }: Props) {
       return is_on
         ? { message, undo: () => api.deleteLampSession(session.id) }
         : { message, undo: async () => { await api.restoreLampEnd(session.id, previous_ended_at); } };
+    });
+
+  const pauseLamp = () =>
+    run('pause', async () => {
+      if (paused) {
+        await api.resumeLamp(lampBrief!.id);
+        return { message: 'Пауза снята', undo: async () => { await api.pauseLamp(lampBrief!.id); } };
+      }
+      const lamp = await api.pauseLamp(lampBrief!.id);
+      const until = lamp.paused_until ? fmtTime(lamp.paused_until) : '';
+      return { message: `Лампа погасла до ${until}`, undo: async () => { await api.resumeLamp(lampBrief!.id); } };
     });
 
   const feed = (fertilizerId: number, method: FeedMethod) => {
@@ -76,6 +95,9 @@ export function PlantActions({ s, fertilizers, onChanged, style }: Props) {
         <button className={cls('water')} type="button" data-primary disabled={busy === 'water'} onClick={water}>
           <Icon name="water" />Полить
         </button>
+        <button className={cls('check')} type="button" disabled={busy === 'check'} onClick={checkSoil}>
+          <Icon name="leaf" />Проверил
+        </button>
         <button className={cls('feed')} type="button" disabled={busy === 'feed'} onClick={() => setFeedOpen(true)}>
           <Icon name="feed" />Подкормить
         </button>
@@ -90,6 +112,18 @@ export function PlantActions({ s, fertilizers, onChanged, style }: Props) {
           <Icon name="lamp" />
           <span>{s.lamp.is_on ? 'Лампа горит' : 'Лампа'}</span>
         </button>
+        {lampBrief && lampBrief.has_device && (s.lamp.is_on || paused) && (
+          <button
+            className={cls('pause')}
+            type="button"
+            aria-pressed={paused}
+            disabled={busy === 'pause'}
+            onClick={pauseLamp}
+          >
+            <Icon name="lamp" />
+            <span>{paused ? `пауза до ${fmtTime(lampBrief.paused_until!)}` : 'Пауза 10 мин'}</span>
+          </button>
+        )}
       </div>
       <Sheet open={feedOpen} onClose={() => setFeedOpen(false)}>
         <FeedForm s={s} fertilizers={fertilizers} onSubmit={feed} onCancel={() => setFeedOpen(false)} />

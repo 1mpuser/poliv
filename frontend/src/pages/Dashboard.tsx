@@ -13,8 +13,8 @@ function todo(list: PlantSummary[]): { status: Status; text: string } {
   let status: Status = 'ok';
   for (const s of list) {
     const parts: string[] = [];
-    if (s.water.status === 'late') parts.push('пора полить');
-    else if (s.water.status === 'soon') parts.push('скоро полив');
+    if (s.water.status === 'late') parts.push('пора проверить грунт');
+    else if (s.water.status === 'soon') parts.push('скоро проверка грунта');
     if (s.feed.status === 'late') parts.push('пора подкормить');
     else if (s.feed.status === 'soon') parts.push('скоро подкормка');
     if (s.repot.status === 'late') parts.push('пора проверить горшок');
@@ -24,6 +24,14 @@ function todo(list: PlantSummary[]): { status: Status; text: string } {
     else if (status !== 'late') status = 'soon';
   }
   return { status, text: lines.length ? lines.join(' ') : 'Все растения в порядке' };
+}
+
+/** Растения, которым нужно внимание — сверху: сначала «пора», потом «скоро». */
+function priority(s: PlantSummary): number {
+  const st = [s.water.status, s.feed.status, s.repot.status];
+  if (st.includes('late')) return 0;
+  if (st.includes('soon')) return 1;
+  return 2;
 }
 
 export function Dashboard() {
@@ -82,9 +90,12 @@ export function Dashboard() {
       )}
 
       <section className="plant-grid" aria-label="Растения">
-        {summaries?.map((s) => (
-          <PlantCard key={s.plant.id} s={s} fertilizers={fertilizers} onChanged={reload} />
-        ))}
+        {summaries
+          ?.slice()
+          .sort((a, b) => priority(a) - priority(b))
+          .map((s) => (
+            <PlantCard key={s.plant.id} s={s} fertilizers={fertilizers} onChanged={reload} />
+          ))}
         {summaries && (
           <Link className="add-card" to="/plants/new">
             <Icon name="plus" />

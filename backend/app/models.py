@@ -115,6 +115,16 @@ class WateringLog(Base):
     note: Mapped[str | None] = mapped_column(Text)
 
 
+class SoilCheck(Base):
+    """Проверка грунта: хозяин трогает землю и сам решает, поливать ли. Сбрасывает счётчик растения."""
+
+    __tablename__ = "soil_checks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    plant_id: Mapped[int] = mapped_column(ForeignKey("plants.id", ondelete="CASCADE"), index=True)
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class FeedingLog(Base):
     __tablename__ = "feeding_logs"
 
@@ -151,6 +161,8 @@ class Lamp(Base):
     last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Не NULL — лампу «удалили»: скрыта, сессии остаются для истории растений
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # До этого момента лампа на паузе: гаснет и сама перезагорится, когда начнётся хвост
+    paused_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (CheckConstraint("evening_not_after > morning_not_before", name="lamp_bounds_order"),)
 
@@ -185,6 +197,8 @@ class LampSession(Base):
     schedule_id: Mapped[int | None] = mapped_column(
         ForeignKey("lamp_schedules.id", ondelete="SET NULL"), index=True
     )
+    # Хвост после паузы: replan_auto такие будущие сессии не удаляет
+    after_pause: Mapped[bool] = mapped_column(Boolean, default=False)
 
     __table_args__ = (
         CheckConstraint("ended_at IS NULL OR ended_at >= started_at", name="lamp_end_after_start"),

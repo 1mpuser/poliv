@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, FastAPI
 
 from app import auth
 from app.db import SessionLocal
-from app.routers import admin, fertilizers, lamp, lamps, light, logs, plants, settings
+from app.routers import admin, checks, fertilizers, lamp, lamps, light, logs, plants, settings
 from app.services import lamps as lamps_svc
 from app.services.light import sync_all
 
@@ -61,7 +61,7 @@ api = APIRouter(prefix="/api")
 api.include_router(auth.router)
 
 protected = APIRouter(dependencies=[Depends(auth.current_user)])
-for r in (admin.router, plants.router, fertilizers.router, logs.router, lamp.router, lamps.router, lamps.yandex_router, light.router, settings.router):
+for r in (admin.router, plants.router, fertilizers.router, logs.router, lamp.router, lamps.router, lamps.yandex_router, light.router, settings.router, checks.router):
     protected.include_router(r)
 api.include_router(protected)
 

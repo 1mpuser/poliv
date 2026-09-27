@@ -206,7 +206,7 @@ svg.i { width: 24px; height: 24px; flex: none; fill: none; stroke: currentColor;
 .stats--lg .stat__value { font-size: clamp(40px, 11vw, 56px); }
 
 /* ---------- Кнопки быстрого действия ---------- */
-.actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .action {
   min-height: var(--tap);
   border: 0; border-radius: var(--r-md);

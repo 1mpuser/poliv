@@ -34,22 +34,37 @@ def local_midnight(d: date, tz: ZoneInfo) -> datetime:
     return datetime.combine(d, time.min, tzinfo=tz)
 
 
-# ---------- полив ----------
+# ---------- полив / проверка грунта ----------
 @dataclass(frozen=True)
 class WaterState:
-    days_since: int | None
+    days_since: int | None          # дней с последнего полива
+    days_since_check: int | None    # дней с последней проверки грунта
     due_in_days: int
     status: Status
 
 
 def water_state(
-    last_watered: datetime | None, interval_days: int, ahead: int, now: datetime, tz: ZoneInfo
+    last_watered: datetime | None,
+    last_checked: datetime | None,
+    interval_days: int,
+    ahead: int,
+    now: datetime,
+    tz: ZoneInfo,
 ) -> WaterState:
-    if last_watered is None:
-        return WaterState(None, 0, "late")
-    days_since = (local_date(now, tz) - local_date(last_watered, tz)).days
-    due_in = interval_days - days_since
-    return WaterState(days_since, due_in, status_for(due_in, ahead))
+    """Счётчик сбрасывается и поливом, и проверкой грунта — статус считается от последнего касания.
+
+    days_since остаётся дней с полива (история поливов), а срок/статус — по более позднему
+    из полива и проверки (проверку можно сделать раньше срока, и она «перезапускает» таймер).
+    """
+    today = local_date(now, tz)
+    days_water = (today - local_date(last_watered, tz)).days if last_watered else None
+    days_check = (today - local_date(last_checked, tz)).days if last_checked else None
+    distances = [d for d in (days_water, days_check) if d is not None]
+    if not distances:
+        return WaterState(days_water, days_check, 0, "late")
+    touch_days = min(distances)
+    due_in = interval_days - touch_days
+    return WaterState(days_water, days_check, due_in, status_for(due_in, ahead))
 
 
 # ---------- подкормка ----------

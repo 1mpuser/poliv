@@ -56,22 +56,41 @@ def test_status_for(due_in, ahead, expected):
     assert status_for(due_in, ahead) == expected
 
 
-# ---------- полив ----------
+# ---------- полив / проверка грунта ----------
 def test_water_counts_calendar_days_in_local_tz():
     # 23:30 по Москве вчера и 00:10 сегодня — это уже 1 день
-    s = water_state(msk(2026, 9, 22, 23, 30), 4, 1, msk(2026, 9, 23, 0, 10), MSK)
+    s = water_state(msk(2026, 9, 22, 23, 30), None, 4, 1, msk(2026, 9, 23, 0, 10), MSK)
     assert (s.days_since, s.due_in_days, s.status) == (1, 3, "ok")
 
 
 def test_water_soon_and_late():
     now = msk(2026, 9, 23, 12)
-    assert water_state(msk(2026, 9, 20, 9), 4, 1, now, MSK).status == "soon"
-    assert water_state(msk(2026, 9, 19, 9), 4, 1, now, MSK).status == "late"
+    assert water_state(msk(2026, 9, 20, 9), None, 4, 1, now, MSK).status == "soon"
+    assert water_state(msk(2026, 9, 19, 9), None, 4, 1, now, MSK).status == "late"
 
 
 def test_water_never_watered_is_late():
-    s = water_state(None, 4, 1, msk(2026, 9, 23, 12), MSK)
-    assert (s.days_since, s.status) == (None, "late")
+    s = water_state(None, None, 4, 1, msk(2026, 9, 23, 12), MSK)
+    assert (s.days_since, s.days_since_check, s.status) == (None, None, "late")
+
+
+def test_soil_check_resets_counter():
+    # полив был давно, но вчера проверка — счётчик сброшен, days_since остаётся с полива
+    s = water_state(msk(2026, 9, 20, 9), msk(2026, 9, 22, 9), 4, 1, msk(2026, 9, 23, 12), MSK)
+    assert (s.days_since, s.days_since_check) == (3, 1)
+    assert (s.due_in_days, s.status) == (3, "ok")
+
+
+def test_watering_also_resets_counter():
+    s = water_state(msk(2026, 9, 22, 9), msk(2026, 9, 20, 9), 4, 1, msk(2026, 9, 23, 12), MSK)
+    assert (s.days_since, s.days_since_check) == (1, 3)
+    assert s.status == "ok"
+
+
+def test_latest_touch_wins_even_if_early_check():
+    # полив 5 дней назад, проверка вчера — по проверке ещё рано, а не «пора от полива»
+    s = water_state(msk(2026, 9, 18, 9), msk(2026, 9, 22, 9), 4, 1, msk(2026, 9, 23, 12), MSK)
+    assert (s.days_since, s.due_in_days, s.status) == (5, 3, "ok")
 
 
 # ---------- чередование удобрений ----------

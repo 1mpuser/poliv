@@ -7,6 +7,7 @@ from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+from fastapi import HTTPException, status
 from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
 
@@ -18,6 +19,9 @@ from app.services import secret_box, yandex
 from app.services import summary as rules
 
 log = logging.getLogger("poliv.lamps")
+
+# Пауза «на 10 минут»: хвост продолжает сессию, а недогоревшее время досветки сдвигается
+PAUSE_MINUTES = 10
 
 
 # ---------- растения под лампой ----------
@@ -113,7 +117,14 @@ class Toggled:
 
 def toggle(db: Session, lamp: Lamp, now: datetime) -> Toggled:
     """Гасит то, что горит сейчас (вручную, по расписанию или досветка), иначе включает вручную.
-    previous_ended_at нужен для отмены выключения. Розетка переключается сразу."""
+    previous_ended_at нужен для отмены выключения. Розетка переключается сразу.
+    Во время паузы кнопка отменяет её: будущий хвост удаляется, paused_until = None."""
+    if lamp.paused_until is not None:
+        tail = _tail_session(db, lamp)
+        if tail is not None:
+            db.delete(tail)
+        lamp.paused_until = None
+        db.flush()
     current = covering_session(db, lamp.id, now)
     if current is not None:
         result = Toggled(False, current, current.ended_at)
@@ -126,6 +137,114 @@ def toggle(db: Session, lamp: Lamp, now: datetime) -> Toggled:
     db.refresh(current)
     sync_plug(db, lamp, now)
     return result
+
+
+# ---------- пауза лампы ----------
+def _tail_session(db: Session, lamp: Lamp) -> LampSession | None:
+    """Сессия-хвост текущей паузы: создается со started_at == paused_until."""
+    if lamp.paused_until is None:
+        return None
+    return db.scalars(
+        select(LampSession).where(
+            LampSession.lamp_id == lamp.id,
+            LampSession.after_pause.is_(True),
+            LampSession.started_at == lamp.paused_until,
+        )
+    ).first()
+
+
+def _clamp_auto_end(end: datetime, lamp: Lamp, tz) -> datetime:
+    """Конец хвоста «Авто» не позже evening_not_after этого дня."""
+    limit = datetime.combine(rules.local_date(end, tz), lamp.evening_not_after, tzinfo=tz)
+    return min(end, limit)
+
+
+def _extend_pause(db: Session, lamp: Lamp, now: datetime) -> None:
+    """Повторная пауза во время паузы: +10 минут и сдвиг хвоста (auto — и конца). Без commit."""
+    tail = _tail_session(db, lamp)
+    old_pause = lamp.paused_until
+    lamp.paused_until = old_pause + timedelta(minutes=PAUSE_MINUTES)
+    if tail is None:
+        db.flush()
+        return
+    tail.started_at = lamp.paused_until
+    if tail.source == LampSource.auto and tail.ended_at is not None:
+        tail.ended_at = _clamp_auto_end(tail.ended_at + timedelta(minutes=PAUSE_MINUTES), lamp, settings.zone)
+    elif tail.source == LampSource.schedule and tail.ended_at is not None and lamp.paused_until >= tail.ended_at:
+        # расписание жёсткое — пауза съела хвост целиком
+        db.delete(tail)
+    db.flush()
+
+
+def pause(db: Session, lamp: Lamp, now: datetime) -> None:
+    """Пауза лампы на 10 минут: горящая сессия разрезается на now, хвост начинает позже с после_pause.
+    Часы растения время паузы не включают; в «Авто» недогоревшее сдвигается (конец +10 мин).
+    Повторная пауза во время паузы продлевает её. Розетка гаснет сразу."""
+    tz = settings.zone
+    if lamp.paused_until is not None:
+        _extend_pause(db, lamp, now)
+    else:
+        current = covering_session(db, lamp.id, now)
+        if current is None:
+            raise HTTPException(status.HTTP_409_CONFLICT, "Лампа не горит — её не нужно ставить на паузу")
+        old_end = current.ended_at
+        lamp.paused_until = now + timedelta(minutes=PAUSE_MINUTES)
+        current.ended_at = now
+        db.flush()
+        if current.source == LampSource.auto:
+            new_end = _clamp_auto_end(old_end + timedelta(minutes=PAUSE_MINUTES), lamp, tz) if old_end is not None else None
+            if new_end is not None and new_end > lamp.paused_until:
+                db.add(
+                    LampSession(
+                        user_id=lamp.user_id, lamp_id=lamp.id, source=LampSource.auto,
+                        started_at=lamp.paused_until, ended_at=new_end, after_pause=True,
+                    )
+                )
+        elif current.source == LampSource.schedule:
+            if old_end is not None and old_end > lamp.paused_until:
+                db.add(
+                    LampSession(
+                        user_id=lamp.user_id, lamp_id=lamp.id, source=LampSource.schedule,
+                        schedule_id=current.schedule_id, started_at=lamp.paused_until,
+                        ended_at=old_end, after_pause=True,
+                    )
+                )
+        else:  # manual — открытая сессия: хвост горит с paused_until до «выключили»
+            db.add(
+                LampSession(
+                    user_id=lamp.user_id, lamp_id=lamp.id, source=LampSource.manual,
+                    started_at=lamp.paused_until, after_pause=True,
+                )
+            )
+        db.flush()
+    db.commit()
+    db.refresh(lamp)
+    sync_plug(db, lamp, now)
+
+
+def resume(db: Session, lamp: Lamp, now: datetime) -> None:
+    """«Продолжить» раньше срока: хвост начинается с now, конец сдвигается на неиспользованную
+    часть паузы (auto). paused_until = None. Розетка включается, если хвост ещё впереди."""
+    if lamp.paused_until is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Лампа не на паузе")
+    if now >= lamp.paused_until:
+        lamp.paused_until = None
+        db.commit()
+        db.refresh(lamp)
+        sync_plug(db, lamp, now)
+        return
+    tail = _tail_session(db, lamp)
+    leftover = lamp.paused_until - now
+    lamp.paused_until = None
+    if tail is not None:
+        tail.started_at = now
+        if tail.source == LampSource.auto and tail.ended_at is not None:
+            tail.ended_at = tail.ended_at - leftover
+        elif tail.source == LampSource.schedule and tail.ended_at is not None and now >= tail.ended_at:
+            db.delete(tail)
+    db.commit()
+    db.refresh(lamp)
+    sync_plug(db, lamp, now)
 
 
 # ---------- досветка до нормы ----------
@@ -175,31 +294,33 @@ def _add_auto(db: Session, lamp: Lamp, window: tuple[datetime, datetime] | None,
 def replan_auto(db: Session, lamp: Lamp, now: datetime) -> None:
     """Досветка на сегодня: не начавшиеся части (утро до рассвета, вечер после заката, день между ними)
     пересоздаются по свежим данным; начавшиеся и прошедшие не трогаются — в том числе выключенные кнопкой.
-    Части определяются по солнцу: утро — до рассвета, вечер — с заката, день — между ними (в пасмурный день
-    остаток, который не влез в вечер, добирается днём вплотную перед закатом)."""
+    Хвосты после паузы (after_pause) не удаляются и считаются частью уже начатого отрезка (утро/день/вечер),
+    чтобы пауза не потеряла запланированный свет. Части определяются по солнцу: утро — до рассвета,
+    вечер — с заката, день — между ними (в пасмурный день остаток, который не влез в вечер,
+    добирается днём вплотную перед закатом)."""
     tz = settings.zone
     day = rules.local_date(now, tz)
     autos = _auto_today(db, lamp, now)
     for s in autos:
-        if s.started_at > now:
+        if s.started_at > now and not s.after_pause:
             db.delete(s)
     db.flush()
-    started = [s for s in autos if s.started_at <= now]
+    kept = [s for s in autos if s.started_at <= now or s.after_pause]
     daylight = db.get(DaylightDay, (lamp.user_id, day))
     ids = plant_ids(db, lamp.id)
     if daylight is not None and ids:
         natural = daylight.sunshine_hours
         sunrise, sunset = daylight.sunrise, daylight.sunset
-        if sunrise is not None and not any(s.started_at < sunrise for s in started):
+        if sunrise is not None and not any(s.started_at < sunrise for s in kept):
             need = _worst_deficit(db, ids, natural, now)
             _add_auto(db, lamp, rules.plan_morning(need, sunrise, lamp.morning_not_before, day, tz), now)
-        if sunset is not None and not any(s.started_at >= sunset for s in started):
+        if sunset is not None and not any(s.started_at >= sunset for s in kept):
             remaining = _worst_deficit(db, ids, natural, now)  # утро уже учтено
             _add_auto(db, lamp, rules.plan_evening(remaining, sunset, lamp.evening_not_after, day, tz), now)
         if (
             sunrise is not None
             and sunset is not None
-            and not any(sunrise <= s.started_at < sunset for s in started)
+            and not any(sunrise <= s.started_at < sunset for s in kept)
         ):
             remaining = _worst_deficit(db, ids, natural, now)  # утро и вечер уже учтены
             _add_auto(db, lamp, rules.plan_day(remaining, sunrise, sunset), now)
@@ -207,7 +328,9 @@ def replan_auto(db: Session, lamp: Lamp, now: datetime) -> None:
 
 
 def stop_auto(db: Session, lamp: Lamp, now: datetime) -> None:
-    """Режим больше не «Авто»: идущая досветка гаснет сейчас, будущая удаляется. Без commit."""
+    """Режим больше не «Авто»: идущая досветка гаснет сейчас, будущая удаляется — и хвосты паузы тоже.
+    Без commit."""
+    lamp.paused_until = None
     for s in _auto_today(db, lamp, now):
         if s.started_at > now:
             db.delete(s)
@@ -295,6 +418,7 @@ def archive(db: Session, lamp: Lamp, now: datetime) -> None:
     """«Удалить» лампу: растения без лампы, горящее гаснет, будущее и расписание удаляются,
     розетке — «выкл». Прошлые сессии остаются — история растений не меняется."""
     lamp.archived_at = now
+    lamp.paused_until = None
     for pid in plant_ids(db, lamp.id):
         assign(db, pid, None, now)
     for s in db.scalars(
@@ -328,6 +452,7 @@ def lamp_out(db: Session, lamp: Lamp, now: datetime) -> schemas.LampOut:
         last_state=lamp.last_state,
         last_error=lamp.last_error,
         last_error_at=lamp.last_error_at,
+        paused_until=lamp.paused_until,
         plant_ids=plant_ids(db, lamp.id),
         is_on=covering_session(db, lamp.id, now) is not None,
         schedule=[
@@ -345,6 +470,7 @@ def brief(db: Session, lamp: Lamp, now: datetime) -> schemas.LampBrief:
         mode=lamp.mode,
         is_on=covering_session(db, lamp.id, now) is not None,
         has_device=lamp.device_id is not None,
+        paused_until=lamp.paused_until,
         planned=_planned(db, lamp, now),
         last_error=lamp.last_error,
     )
@@ -369,6 +495,8 @@ def tick(db: Session, now: datetime | None = None) -> None:
     ).all()
     for lamp in lamps:
         try:
+            if lamp.paused_until is not None and now >= lamp.paused_until:
+                lamp.paused_until = None
             if lamp.mode == LampMode.auto:
                 replan_auto(db, lamp, now)
             sync_plug(db, lamp, now)

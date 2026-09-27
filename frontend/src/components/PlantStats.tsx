@@ -1,4 +1,4 @@
-import { fmtHours } from '../format';
+import { DAYS, fmtHours, plural } from '../format';
 import type { PlantSummary, Status } from '../types';
 import { Icon, type IconName } from './icons';
 
@@ -32,6 +32,17 @@ const FLAG: Record<Status, string> = { ok: '', soon: 'скоро', late: 'пор
 export function PlantStats({ s, detailed }: { s: PlantSummary; detailed?: boolean }) {
   const { water, feed, light } = s;
 
+  // Счётчик сбрасывается и поливом, и проверкой грунта — показываем дни с последнего касания
+  const touchDays = [water.days_since, water.days_since_check]
+    .filter((x): x is number => x != null)
+    .reduce<number | undefined>((min, v) => (min === undefined ? v : Math.min(min, v)), undefined);
+  const soilDue = water.status === 'late' || water.status === 'soon';
+  const soilLabel = soilDue
+    ? 'Проверить грунт…'
+    : touchDays === undefined
+      ? 'проверено недавно'
+      : `проверено ${touchDays} ${plural(touchDays, DAYS)} назад`;
+
   let feedValue = '—';
   let feedUnit = '';
   let feedLabel: string;
@@ -53,12 +64,12 @@ export function PlantStats({ s, detailed }: { s: PlantSummary; detailed?: boolea
         icon="water"
         kind="water"
         status={water.status}
-        value={water.days_since === null ? '—' : String(water.days_since)}
-        unit={water.days_since === null ? '' : 'д'}
+        value={touchDays === undefined ? '—' : String(touchDays)}
+        unit={touchDays === undefined ? '' : 'д'}
         label={
-          water.days_since === null
-            ? 'ещё не поливали'
-            : detailed ? `с полива, норма ${water.interval_days}` : 'с полива'
+          detailed
+            ? `${soilLabel}, норма ${water.interval_days} д`
+            : soilLabel
         }
         flag={FLAG[water.status]}
       />

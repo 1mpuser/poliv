@@ -100,7 +100,7 @@ export function PlantForm({ value, onChange }: { value: PlantFields; onChange: (
 
       <h2 className="section__title" style={{ marginTop: 20 }}>Уход</h2>
       <div className="form-group">
-        <Field label="Полив" hint="Раз в столько дней">
+        <Field label="Проверка грунта" hint="Раз в столько дней проверять">
           {(id) => <Stepper labelledBy={id} min={1} max={30} units={DAYS} value={value.water_interval_days} onChange={(v) => set('water_interval_days', v)} />}
         </Field>
         <Field label="Норма света" hint="Солнце + лампа, часов в день">
