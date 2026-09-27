@@ -85,6 +85,9 @@ cd frontend && API_URL=https://polivalochka.cool:1477 npm run dev   # по ум�
 - Весь текст интерфейса на русском; числа и даты — через `src/format.ts` (`plural`, `fmtDate`, `fmtHours`).
 - Запросы — только через `src/api.ts`. Быстрые действия показывают тост с «Отменить» (`useToast`).
 - Без UI-библиотек и стейт-менеджеров: `useAsync` + локальный state.
+- Устанавливается на телефон: `public/manifest.webmanifest` + PNG-иконки (генерируются из `icon.svg`)
+  + iOS-meta в `index.html`. **Без service worker и офлайн-кэша**: `/api` кэшироваться не должен
+  (статусы считаются на бэкенде «на сейчас», кэш ломает вход и смену токена).
 
 ## Инфраструктура
 
