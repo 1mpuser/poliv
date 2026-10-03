@@ -42,7 +42,7 @@ PATCH меняет только переданные поля; явный `null`
 |---|---|---|
 | `waterings` | `{plant_id, watered_at?, note?}` | время по умолчанию — сейчас |
 | `checks` | `POST /plants/{id}/checks` (пусто, 201 → `{id, plant_id, checked_at}`) · `DELETE /checks/{id}` | «проверил грунт» — сбрасывает счётчик растения |
-| `feedings` | `{plant_id, fertilizer_type_id, method: root\|foliar, fed_at?, note?}` | |
+| `feedings` | `{plant_id, fertilizer_type_id, method: root\|foliar, fed_at?, note?}` | `method=root` (по умолчанию) в той же транзакции создаёт полив (`watering_logs`), если в этот день полива ещё не было; удаление корневой подкормки убирает её автополив. `foliar` полив не создаёт |
 | `repottings` | `{plant_id, repotted_at?, pot_size_before?, pot_size_after?, note?}` | обновляет `pot_size_l` растения |
 
 ## Свет

@@ -5,9 +5,12 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"poliv/internal/models"
 	"poliv/internal/render"
 	"poliv/internal/schema"
+	"poliv/internal/summary"
 )
 
 // ---------- Полив ----------
@@ -202,9 +205,41 @@ func (s *Server) createFeeding(w http.ResponseWriter, r *http.Request, user *mod
 		fedAt = &t
 	}
 	note := bStr(b, "note")
+
+	ctx := r.Context()
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	// Корневая подкормка — всегда полив раствором. Полив создаём в той же транзакции,
+	// но не плодим дубль: если в этот календарный день полив уже был, автополив не нужен.
+	var wateringID *int
+	if method == "root" {
+		exists, err := s.wateringExistsInDay(ctx, tx, plantID, *fedAt)
+		if err != nil {
+			writeDetail(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if !exists {
+			wid, err := s.createAutoWatering(ctx, tx, plantID, *fedAt)
+			if err != nil {
+				writeDetail(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			wateringID = &wid
+		}
+	}
+
 	var id int
-	if err := s.Pool.QueryRow(r.Context(), `INSERT INTO feeding_logs (plant_id, fertilizer_type_id, method, fed_at, note)
-		VALUES ($1,$2,$3,$4,$5) RETURNING id`, plantID, fertID, method, *fedAt, note).Scan(&id); err != nil {
+	if err := tx.QueryRow(ctx, `INSERT INTO feeding_logs (plant_id, fertilizer_type_id, method, fed_at, note, watering_id)
+		VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`, plantID, fertID, method, *fedAt, note, wateringID).Scan(&id); err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
 		writeDetail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -235,10 +270,11 @@ func (s *Server) updateFeeding(w http.ResponseWriter, r *http.Request, user *mod
 		writeValidation(w, nil)
 		return
 	}
-	row := s.Pool.QueryRow(r.Context(), `SELECT f.id, f.plant_id, f.fertilizer_type_id, f.method::text, f.fed_at, f.note
+	ctx := r.Context()
+	row := s.Pool.QueryRow(ctx, `SELECT f.id, f.plant_id, f.fertilizer_type_id, f.method::text, f.fed_at, f.note, f.watering_id
 		FROM feeding_logs f JOIN plants p ON p.id=f.plant_id WHERE f.id=$1 AND p.user_id=$2`, id, user.ID)
 	var log models.FeedingLog
-	if err := row.Scan(&log.ID, &log.PlantID, &log.FertilizerTypeID, &log.Method, &log.FedAt, &log.Note); err != nil {
+	if err := row.Scan(&log.ID, &log.PlantID, &log.FertilizerTypeID, &log.Method, &log.FedAt, &log.Note, &log.WateringID); err != nil {
 		writeDetail(w, http.StatusNotFound, "Запись не найдена")
 		return
 	}
@@ -250,32 +286,51 @@ func (s *Server) updateFeeding(w http.ResponseWriter, r *http.Request, user *mod
 	set := map[string]any{}
 	if b.has("fertilizer_type_id") {
 		fid := intOr(b, "fertilizer_type_id", 0)
-		if _, err := s.ownedFertilizer(r.Context(), fid, user.ID); err != nil {
+		if _, err := s.ownedFertilizer(ctx, fid, user.ID); err != nil {
 			writeDetail(w, http.StatusNotFound, "Удобрение не найдено")
 			return
 		}
 		set["fertilizer_type_id"] = fid
 	}
+	newMethod := log.Method
 	if b.has("method") {
-		set["method"] = strOr(b, "method", "root")
+		newMethod = strOr(b, "method", "root")
+		set["method"] = newMethod
 	}
+	newFedAt := log.FedAt
 	if b.has("fed_at") {
 		t, err := b.timeField("fed_at")
 		if err != nil {
 			writeValidation(w, nil)
 			return
 		}
+		if t != nil {
+			newFedAt = *t
+		}
 		set["fed_at"] = t
 	}
 	if b.has("note") {
 		set["note"] = bStr(b, "note")
 	}
-	if err := applySet(r.Context(), s.Pool, "feeding_logs", id, set); err != nil {
+	if err := applySet(ctx, s.Pool, "feeding_logs", id, set); err != nil {
 		writeDetail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, schema.FeedingOut{ID: log.ID, PlantID: log.PlantID, FertilizerTypeID: log.FertilizerTypeID,
-		Method: log.Method, FedAt: render.Time(log.FedAt, s.Zone), Note: log.Note})
+	if newMethod != log.Method || !newFedAt.Equal(log.FedAt) {
+		if err := s.reconcileFeedingWatering(ctx, log.PlantID, id, log.WateringID, newMethod, newFedAt); err != nil {
+			writeDetail(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	row = s.Pool.QueryRow(ctx, `SELECT f.id, f.plant_id, f.fertilizer_type_id, f.method::text, f.fed_at, f.note, f.watering_id
+		FROM feeding_logs f JOIN plants p ON p.id=f.plant_id WHERE f.id=$1 AND p.user_id=$2`, id, user.ID)
+	var upd models.FeedingLog
+	if err := row.Scan(&upd.ID, &upd.PlantID, &upd.FertilizerTypeID, &upd.Method, &upd.FedAt, &upd.Note, &upd.WateringID); err != nil {
+		writeDetail(w, http.StatusNotFound, "Запись не найдена")
+		return
+	}
+	writeJSON(w, http.StatusOK, schema.FeedingOut{ID: upd.ID, PlantID: upd.PlantID, FertilizerTypeID: upd.FertilizerTypeID,
+		Method: upd.Method, FedAt: render.Time(upd.FedAt, s.Zone), Note: upd.Note})
 }
 
 func (s *Server) deleteFeeding(w http.ResponseWriter, r *http.Request, user *models.User) {
@@ -284,15 +339,138 @@ func (s *Server) deleteFeeding(w http.ResponseWriter, r *http.Request, user *mod
 		writeValidation(w, nil)
 		return
 	}
-	if _, err := s.rLog(r.Context(), "feeding_logs", id, user.ID); err != nil {
+	ctx := r.Context()
+	var wateringID *int
+	if err := s.Pool.QueryRow(ctx, `SELECT f.watering_id FROM feeding_logs f
+		JOIN plants p ON p.id=f.plant_id WHERE f.id=$1 AND p.user_id=$2`, id, user.ID).Scan(&wateringID); err != nil {
 		writeDetail(w, http.StatusNotFound, "Запись не найдена")
 		return
 	}
-	if _, err := s.Pool.Exec(r.Context(), `DELETE FROM feeding_logs WHERE id=$1`, id); err != nil {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `DELETE FROM feeding_logs WHERE id=$1`, id); err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if wateringID != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM watering_logs WHERE id=$1`, *wateringID); err != nil {
+			writeDetail(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
 		writeDetail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusNoContent, nil)
+}
+
+// querier — общий интерфейс для *pgxpool.Pool и pgx.Tx, чтобы проверки работали и в транзакции.
+type querier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+const autoWaterNote = "с подкормкой"
+
+// wateringExistsInDay — есть ли у растения полив в тот же календарный день (в зоне учётки), что at.
+// excludeID позволяет не считать сам автополив при проверке нового дня.
+func (s *Server) wateringExistsInDay(ctx context.Context, q querier, plantID int, at time.Time) (bool, error) {
+	return s.wateringExistsInDayExclude(ctx, q, plantID, at, nil)
+}
+
+func (s *Server) wateringExistsInDayExclude(ctx context.Context, q querier, plantID int, at time.Time, excludeID *int) (bool, error) {
+	day := summary.LocalDate(at, s.Zone)
+	start := summary.LocalMidnight(day, s.Zone)
+	end := summary.LocalMidnight(summary.DateAddDays(day, 1), s.Zone)
+	sql := `SELECT EXISTS(SELECT 1 FROM watering_logs WHERE plant_id=$1 AND watered_at >= $2 AND watered_at < $3`
+	args := []any{plantID, start, end}
+	if excludeID != nil {
+		sql += ` AND id <> $4`
+		args = append(args, *excludeID)
+	}
+	sql += `)`
+	var exists bool
+	if err := q.QueryRow(ctx, sql, args...).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+// createAutoWatering — запись полива с заметкой о подкормке, создаётся в транзакции.
+func (s *Server) createAutoWatering(ctx context.Context, tx pgx.Tx, plantID int, at time.Time) (int, error) {
+	var id int
+	err := tx.QueryRow(ctx, `INSERT INTO watering_logs (plant_id, watered_at, note) VALUES ($1,$2,$3) RETURNING id`,
+		plantID, at, autoWaterNote).Scan(&id)
+	return id, err
+}
+
+// reconcileFeedingWatering — после изменения подкормки согласует автополив.
+// root→не-root удаляет автополив, не-root→root создаёт его, время двигается вместе с подкормкой.
+// Вручную созданные поливы не затрагивает: ссылка watering_id есть только у автополива.
+func (s *Server) reconcileFeedingWatering(ctx context.Context, plantID, feedingID int, oldWateringID *int, newMethod string, newFedAt time.Time) error {
+	if newMethod != "root" {
+		if oldWateringID == nil {
+			return nil
+		}
+		tx, err := s.Pool.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback(ctx)
+		if _, err := tx.Exec(ctx, `UPDATE feeding_logs SET watering_id=NULL WHERE id=$1`, feedingID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM watering_logs WHERE id=$1`, *oldWateringID); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	}
+
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if oldWateringID != nil {
+		other, err := s.wateringExistsInDayExclude(ctx, tx, plantID, newFedAt, oldWateringID)
+		if err != nil {
+			return err
+		}
+		if other {
+			if _, err := tx.Exec(ctx, `UPDATE feeding_logs SET watering_id=NULL WHERE id=$1`, feedingID); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `DELETE FROM watering_logs WHERE id=$1`, *oldWateringID); err != nil {
+				return err
+			}
+			return tx.Commit(ctx)
+		}
+		if _, err := tx.Exec(ctx, `UPDATE watering_logs SET watered_at=$2 WHERE id=$1`, *oldWateringID, newFedAt); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	}
+
+	exists, err := s.wateringExistsInDay(ctx, tx, plantID, newFedAt)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	wid, err := s.createAutoWatering(ctx, tx, plantID, newFedAt)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE feeding_logs SET watering_id=$2 WHERE id=$1`, feedingID, wid); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // ---------- Пересадка ----------

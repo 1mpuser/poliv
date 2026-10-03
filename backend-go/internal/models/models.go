@@ -61,6 +61,7 @@ type FeedingLog struct {
 	Method           string
 	FedAt            time.Time
 	Note             *string
+	WateringID       *int
 	// joined fertilizer_type (lazy="joined")
 	FertilizerName *string
 	FertilizerNPK  *string
