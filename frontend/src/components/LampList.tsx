@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { api } from '../api';
 import { fmtTime } from '../format';
+import { plugIssue } from '../lamp';
 import type { Lamp, LampFields, LampMode, Plant } from '../types';
 import { useAsync } from '../useAsync';
 import { Segmented } from './controls';
@@ -81,15 +82,16 @@ export function LampList({ lamps, plants, onChanged }: { lamps: Lamp[]; plants: 
   return (
     <div className="form-group">
       {lamps.length === 0 && editing !== 'new' && <p className="empty">Ламп пока нет</p>}
-      {lamps.map((l) =>
-        editing === l.id ? (
+      {lamps.map((l) => {
+        const issue = plugIssue(l);
+        return editing === l.id ? (
           <LampForm key={l.id} lamp={l} lamps={lamps} plants={plants} onCancel={() => setEditing(null)} onSaved={done} />
         ) : (
           <div className="fert-item" key={l.id}>
             <div className="fert-item__text">
               <div className="field__label">{l.name}</div>
               <div className="fert-item__meta">{meta(l, plants)}</div>
-              {l.last_error && <div className="form-error">Розетка: {l.last_error}</div>}
+              {issue && <div className="form-error">Розетка: {issue}</div>}
             </div>
             {l.device_id && (l.is_on || l.paused_until) && (
               <button
@@ -105,8 +107,8 @@ export function LampList({ lamps, plants, onChanged }: { lamps: Lamp[]; plants: 
             <button className="btn btn--sm" type="button" onClick={() => setEditing(l.id)}>Изменить</button>
             <button className="btn btn--sm btn--danger" type="button" aria-label={`Удалить ${l.name}`} onClick={() => remove(l)}>✕</button>
           </div>
-        ),
-      )}
+        );
+      })}
       {editing === 'new' ? (
         <LampForm lamps={lamps} plants={plants} onCancel={() => setEditing(null)} onSaved={done} />
       ) : (

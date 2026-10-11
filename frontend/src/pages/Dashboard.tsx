@@ -4,6 +4,7 @@ import { Icon } from '../components/icons';
 import { PlantCard } from '../components/PlantCard';
 import { useToast } from '../components/toast';
 import { fmtToday } from '../format';
+import { lampChipText, plugIssue } from '../lamp';
 import type { Lamp, PlantSummary, Status } from '../types';
 import { useAsync } from '../useAsync';
 
@@ -80,12 +81,26 @@ export function Dashboard() {
 
       {lamps.length > 0 && (
         <div className="toolbar">
-          {lamps.map((l) => (
-            <button className="chip" type="button" key={l.id} aria-pressed={l.is_on} data-on={l.is_on} onClick={() => toggle(l)}>
-              <Icon name="lamp" />
-              {l.is_on ? `${l.name} горит` : l.name}
-            </button>
-          ))}
+          {lamps.map((l) => {
+            const issue = plugIssue(l);
+            return (
+              <button
+                className={`chip${issue ? ' chip--error' : ''}`}
+                type="button"
+                key={l.id}
+                aria-pressed={l.is_on}
+                data-on={l.is_on}
+                onClick={() => toggle(l)}
+                title={issue ?? undefined}
+              >
+                <Icon name="lamp" />
+                <span className="chip__text">
+                  <span className="chip__label">{lampChipText(l)}</span>
+                  {issue && <span className="chip__err">{issue}</span>}
+                </span>
+              </button>
+            );
+          })}
         </div>
       )}
 

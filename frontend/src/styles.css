@@ -576,3 +576,27 @@ body:has(.login) { padding-bottom: 0; }
 /* Строка удобрения/лампы: при трёх кнопках на узком экране кнопки уходят вниз,
    а название не сжимается до нуля */
 .fert-item { flex-wrap: wrap; }
+
+/* Розетка лампы не ответила: предупреждение вместо «горит» на чипах дашборда.
+   `--late` — из существующих токенов (красный), без новых цветов вне :root. */
+.chip.chip--error {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 6px 14px; border-radius: var(--r-md);
+  border-color: color-mix(in srgb, var(--late) 45%, var(--line));
+  background: color-mix(in srgb, var(--late) 12%, var(--surface));
+  color: var(--ink);
+}
+.chip.chip--error .chip__text { display: grid; gap: 2px; min-width: 0; text-align: left; }
+.chip.chip--error .chip__label { font-weight: 600; }
+.chip.chip--error .chip__err {
+  font-size: 12px; font-weight: 500; color: var(--late);
+  overflow-wrap: anywhere; white-space: normal;
+}
+
+/* Кнопка «Лампа» у растения, чья розетка не ответила: подпись «Розетка не отвечает» */
+.action.action--warn,
+.action.action--warn[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--late) 14%, var(--surface-2));
+  color: var(--late);
+}
+.action.action--warn .i { color: var(--late); }

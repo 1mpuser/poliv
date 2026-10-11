@@ -1,6 +1,7 @@
 import { useState, type CSSProperties } from 'react';
 import { api } from '../api';
 import { fmtTime } from '../format';
+import { plugIssue } from '../lamp';
 import type { FeedMethod, Fertilizer, PlantSummary } from '../types';
 import { Segmented, Sheet } from './controls';
 import { Icon } from './icons';
@@ -56,6 +57,7 @@ export function PlantActions({ s, fertilizers, onChanged, style }: Props) {
     });
 
   const lampBrief = s.light.lamp;
+  const lampIssue = plugIssue(lampBrief);
   const paused = !!lampBrief?.paused_until;
 
   const lamp = () =>
@@ -102,15 +104,21 @@ export function PlantActions({ s, fertilizers, onChanged, style }: Props) {
           <Icon name="feed" />Подкормить
         </button>
         <button
-          className={cls('lamp')}
+          className={`${cls('lamp')}${lampIssue ? ' action--warn' : ''}`}
           type="button"
           aria-pressed={s.lamp.is_on}
           disabled={busy === 'lamp' || !lampBrief}
-          title={lampBrief ? undefined : 'Привяжите лампу в настройках'}
+          title={
+            !lampBrief
+              ? 'Привяжите лампу в настройках'
+              : lampIssue
+                ? `Розетка не отвечает: ${lampIssue}`
+                : undefined
+          }
           onClick={lamp}
         >
           <Icon name="lamp" />
-          <span>{s.lamp.is_on ? 'Лампа горит' : 'Лампа'}</span>
+          <span>{lampIssue ? 'Розетка не отвечает' : s.lamp.is_on ? 'Лампа горит' : 'Лампа'}</span>
         </button>
         {lampBrief && lampBrief.has_device && (s.lamp.is_on || paused) && (
           <button
