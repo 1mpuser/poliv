@@ -387,8 +387,8 @@ func SyncAll(ctx context.Context, pool *pgxpool.Pool, tz *time.Location) error {
 func GetSettings(ctx context.Context, pool *pgxpool.Pool, userID int) (*models.UserSettings, error) {
 	var s models.UserSettings
 	err := pool.QueryRow(ctx, `SELECT user_id, current_season::text, notify_days_ahead, location_name,
-		latitude, longitude, yandex_token, yandex_token_invalid FROM user_settings WHERE user_id=$1`, userID).Scan(
-		&s.UserID, &s.CurrentSeason, &s.NotifyDaysAhead, &s.LocationName, &s.Latitude, &s.Longitude, &s.YandexToken, &s.YandexTokenInvalid)
+		latitude, longitude, yandex_token, yandex_token_invalid, yandex_token_invalid_at FROM user_settings WHERE user_id=$1`, userID).Scan(
+		&s.UserID, &s.CurrentSeason, &s.NotifyDaysAhead, &s.LocationName, &s.Latitude, &s.Longitude, &s.YandexToken, &s.YandexTokenInvalid, &s.YandexTokenInvalidAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}

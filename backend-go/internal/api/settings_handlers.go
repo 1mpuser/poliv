@@ -85,7 +85,7 @@ func (s *Server) setYandexToken(w http.ResponseWriter, r *http.Request, user *mo
 		return
 	}
 	if b.Token == nil {
-		if _, err := s.Pool.Exec(r.Context(), `UPDATE user_settings SET yandex_token=NULL, yandex_token_invalid=false WHERE user_id=$1`, user.ID); err != nil {
+		if _, err := s.Pool.Exec(r.Context(), `UPDATE user_settings SET yandex_token=NULL, yandex_token_invalid=false, yandex_token_invalid_at=NULL WHERE user_id=$1`, user.ID); err != nil {
 			writeDetail(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -108,7 +108,7 @@ func (s *Server) setYandexToken(w http.ResponseWriter, r *http.Request, user *mo
 		writeDetail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if _, err := s.Pool.Exec(r.Context(), `UPDATE user_settings SET yandex_token=$1, yandex_token_invalid=false WHERE user_id=$2`,
+	if _, err := s.Pool.Exec(r.Context(), `UPDATE user_settings SET yandex_token=$1, yandex_token_invalid=false, yandex_token_invalid_at=NULL WHERE user_id=$2`,
 		enc, user.ID); err != nil {
 		writeDetail(w, http.StatusInternalServerError, err.Error())
 		return

@@ -137,14 +137,15 @@ type RepottingLog struct {
 }
 
 type UserSettings struct {
-	UserID            int
-	CurrentSeason     string
-	NotifyDaysAhead   int
-	LocationName      *string
-	Latitude          *float64
-	Longitude         *float64
-	YandexToken       *string
-	YandexTokenInvalid bool
+	UserID                int
+	CurrentSeason         string
+	NotifyDaysAhead       int
+	LocationName          *string
+	Latitude              *float64
+	Longitude             *float64
+	YandexToken           *string
+	YandexTokenInvalid    bool
+	YandexTokenInvalidAt  *time.Time
 }
 
 func (s *UserSettings) YandexStatus() string {

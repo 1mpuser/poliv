@@ -123,9 +123,9 @@ func SetBlocked(ctx context.Context, pool *pgxpool.Pool, user *models.User, bloc
 func GetUserSettings(ctx context.Context, pool *pgxpool.Pool, userID int) (*models.UserSettings, error) {
 	var s models.UserSettings
 	err := pool.QueryRow(ctx, `SELECT user_id, current_season::text, notify_days_ahead, location_name,
-		latitude, longitude, yandex_token, yandex_token_invalid
+		latitude, longitude, yandex_token, yandex_token_invalid, yandex_token_invalid_at
 		FROM user_settings WHERE user_id = $1`, userID).Scan(
-		&s.UserID, &s.CurrentSeason, &s.NotifyDaysAhead, &s.LocationName, &s.Latitude, &s.Longitude, &s.YandexToken, &s.YandexTokenInvalid)
+		&s.UserID, &s.CurrentSeason, &s.NotifyDaysAhead, &s.LocationName, &s.Latitude, &s.Longitude, &s.YandexToken, &s.YandexTokenInvalid, &s.YandexTokenInvalidAt)
 	if err == pgx.ErrNoRows {
 		if _, err := pool.Exec(ctx, `INSERT INTO user_settings (user_id) VALUES ($1)`, userID); err != nil {
 			return nil, err

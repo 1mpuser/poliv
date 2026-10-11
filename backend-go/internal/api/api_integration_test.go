@@ -1336,6 +1336,31 @@ func TestPlugErrorsAndArchive(t *testing.T) {
 	if sett["yandex_status"] != "invalid" {
 		t.Fatalf("settings %v", sett)
 	}
+
+	// Токен перепроверяется через 15 минут, а не блокируется навсегда:
+	// после 401/403 до истечения паузы запросов к Яндексу нет, потом — успех.
+	var calls2 []plugCall
+	testSrv.Lamps.YandexSetOn = func(token, dev string, on bool) error {
+		calls2 = append(calls2, plugCall{dev, on})
+		return nil
+	}
+	base := time.Now().UTC()
+	_ = testSrv.Lamps.Tick(context.Background(), base.Add(time.Minute))
+	if len(calls2) != 0 {
+		t.Fatalf("до 15 минут вызовов быть не должно: %v", calls2)
+	}
+	_ = testSrv.Lamps.Tick(context.Background(), base.Add(16*time.Minute))
+	if !callsLast(calls2, "dev-8", true) {
+		t.Fatalf("после перепроверки ждём dev-8,true: %v", calls2)
+	}
+	getJSON(t, "/api/settings", tok, &sett)
+	if sett["yandex_status"] != "ok" {
+		t.Fatalf("yandex_status после перепроверки: %v", sett)
+	}
+	getJSON(t, fmt.Sprintf("/api/lamps/%d", lamp2ID), tok, &lamp2)
+	if lamp2["last_state"] != true || lamp2["last_error"] != nil {
+		t.Fatalf("лампа после перепроверки: %v", lamp2)
+	}
 }
 
 func TestAutoLampPauseSurvivesTick(t *testing.T) {

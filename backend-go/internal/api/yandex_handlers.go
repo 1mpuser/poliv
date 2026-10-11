@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"poliv/internal/models"
 	"poliv/internal/schema"
@@ -23,7 +24,7 @@ func (s *Server) yandexDevices(w http.ResponseWriter, r *http.Request, user *mod
 	if err != nil {
 		var authErr *yandex.YandexAuthError
 		if errors.As(err, &authErr) {
-			if _, err := s.Pool.Exec(r.Context(), `UPDATE user_settings SET yandex_token_invalid=true WHERE user_id=$1`, user.ID); err != nil {
+			if _, err := s.Pool.Exec(r.Context(), `UPDATE user_settings SET yandex_token_invalid=true, yandex_token_invalid_at=$1 WHERE user_id=$2`, time.Now().UTC(), user.ID); err != nil {
 				writeDetail(w, http.StatusInternalServerError, err.Error())
 				return
 			}
@@ -31,6 +32,10 @@ func (s *Server) yandexDevices(w http.ResponseWriter, r *http.Request, user *mod
 			return
 		}
 		writeDetail(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	if _, err := s.Pool.Exec(r.Context(), `UPDATE user_settings SET yandex_token_invalid=false, yandex_token_invalid_at=NULL WHERE user_id=$1`, user.ID); err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	out := make([]schema.YandexDevice, 0, len(devices))

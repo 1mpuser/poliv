@@ -768,6 +768,11 @@ func (s *Service) fail(lamp *models.Lamp, msg string, now time.Time) {
 	lamp.LastErrorAt = &now
 }
 
+// yandexRetryAfter — пауза между попытками после 401/403 от Яндекса. Одиночная ошибка по
+// аварии не должна блокировать розетку до ручного вмешательства: токен перепроверяется
+// не на каждом минутном тике, а не чаще раза в 15 минут.
+const yandexRetryAfter = 15 * time.Minute
+
 // SyncPlug — довести розетку до нужного состояния. Команда — только при смене (last_state).
 func (s *Service) SyncPlug(ctx context.Context, lamp *models.Lamp, now time.Time) error {
 	if lamp.DeviceID == nil {
@@ -782,7 +787,8 @@ func (s *Service) SyncPlug(ctx context.Context, lamp *models.Lamp, now time.Time
 		return nil
 	}
 	var invalid bool
-	err = s.Pool.QueryRow(ctx, `SELECT yandex_token_invalid FROM user_settings WHERE user_id=$1`, lamp.UserID).Scan(&invalid)
+	var invalidAt *time.Time
+	err = s.Pool.QueryRow(ctx, `SELECT yandex_token_invalid, yandex_token_invalid_at FROM user_settings WHERE user_id=$1`, lamp.UserID).Scan(&invalid, &invalidAt)
 	if err != nil && err != pgx.ErrNoRows {
 		return err
 	}
@@ -790,16 +796,19 @@ func (s *Service) SyncPlug(ctx context.Context, lamp *models.Lamp, now time.Time
 	if err != nil {
 		return err
 	}
+	// Пока токен помечен недействительным и с момента 401/403 не прошло yandexRetryAfter,
+	// запрос к Яндексу не делаем: ошибка по аварии не гасит лампу до ручного вмешательства.
+	blocked := invalid && invalidAt != nil && now.Sub(*invalidAt) < yandexRetryAfter
 	if token == nil {
 		s.fail(lamp, "Не задан токен Яндекса", now)
-	} else if invalid {
+	} else if blocked {
 		s.fail(lamp, "Токен Яндекса недействителен — обновите его в настройках", now)
 	} else {
 		err := s.yandexSetOn(*token, *lamp.DeviceID, want)
 		if err != nil {
 			var authErr *yandex.YandexAuthError
 			if errors.As(err, &authErr) {
-				if _, err := s.Pool.Exec(ctx, `UPDATE user_settings SET yandex_token_invalid=true WHERE user_id=$1`, lamp.UserID); err != nil {
+				if _, err := s.Pool.Exec(ctx, `UPDATE user_settings SET yandex_token_invalid=true, yandex_token_invalid_at=$1 WHERE user_id=$2`, now, lamp.UserID); err != nil {
 					return err
 				}
 				s.fail(lamp, err.Error(), now)
@@ -810,6 +819,9 @@ func (s *Service) SyncPlug(ctx context.Context, lamp *models.Lamp, now time.Time
 			lamp.LastState = &want
 			lamp.LastError = nil
 			lamp.LastErrorAt = nil
+			if _, err := s.Pool.Exec(ctx, `UPDATE user_settings SET yandex_token_invalid=false, yandex_token_invalid_at=NULL WHERE user_id=$1`, lamp.UserID); err != nil {
+				return err
+			}
 		}
 	}
 	_, err = s.Pool.Exec(ctx, `UPDATE lamps SET last_state=$1, last_error=$2, last_error_at=$3 WHERE id=$4`,
