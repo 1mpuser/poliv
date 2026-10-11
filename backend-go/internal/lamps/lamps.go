@@ -29,6 +29,10 @@ type querier interface {
 
 const PauseMinutes = 10
 
+// autoManualGrace — сколько ещё гореть ручной сессии в «Авто», если кнопку нажали уже после
+// `evening_not_after`: чтобы лампу не пришлось выключать ночью руками.
+const autoManualGrace = 1 * time.Hour
+
 var ErrLampNotOn = errors.New("Лампа не горит — её не нужно ставить на паузу")
 var ErrLampNotPaused = errors.New("Лампа не на паузе")
 
@@ -318,11 +322,12 @@ func (s *Service) Toggle(ctx context.Context, lamp *models.Lamp, now time.Time) 
 		}
 	} else {
 		var id int
-		if err := tx.QueryRow(ctx, `INSERT INTO lamp_sessions (user_id, lamp_id, source, started_at) VALUES ($1,$2,'manual',$3) RETURNING id`,
-			lamp.UserID, lamp.ID, now).Scan(&id); err != nil {
+		end := s.manualAutoEnd(lamp, now)
+		if err := tx.QueryRow(ctx, `INSERT INTO lamp_sessions (user_id, lamp_id, source, started_at, ended_at) VALUES ($1,$2,'manual',$3,$4) RETURNING id`,
+			lamp.UserID, lamp.ID, now, end).Scan(&id); err != nil {
 			return nil, err
 		}
-		current = &models.LampSession{ID: id, UserID: lamp.UserID, LampID: lamp.ID, Source: "manual", StartedAt: now, PlannedHours: 12}
+		current = &models.LampSession{ID: id, UserID: lamp.UserID, LampID: lamp.ID, Source: "manual", StartedAt: now, PlannedHours: 12, EndedAt: end}
 		result = Toggled{IsOn: true, Session: current}
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -391,13 +396,34 @@ func (s *Service) tailSessions(ctx context.Context, tx pgx.Tx, lamp *models.Lamp
 	return out, rows.Err()
 }
 
+// eveningLimit — сегодняшнее «вечером не позже» лампы (локальное время в s.Zone) для момента end.
+func (s *Service) eveningLimit(end time.Time, lamp *models.Lamp) time.Time {
+	day := summary.LocalDate(end.In(s.Zone), s.Zone)
+	return summary.Combine(day, lamp.EveningNotAfter.Hour(), lamp.EveningNotAfter.Minute(), s.Zone)
+}
+
 func (s *Service) clampAutoEnd(end time.Time, lamp *models.Lamp) time.Time {
-	limitRule := summary.LocalDate(end.In(s.Zone), s.Zone)
-	limit := summary.Combine(limitRule, lamp.EveningNotAfter.Hour(), lamp.EveningNotAfter.Minute(), s.Zone)
+	limit := s.eveningLimit(end, lamp)
 	if end.Before(limit) {
 		return end
 	}
 	return limit
+}
+
+// manualAutoEnd — конец ручной сессии кнопкой в «Авто». Пока `evening_not_after` ещё впереди — это он
+// (чтобы вечером лампа не горела всю ночь и не обрезала досветку открытой сессией); если нажали уже
+// после него — `now + autoManualGrace`, чтобы ручное включение не тянулось до ручного выключения.
+// Вне «Авто» возвращает nil — открытая сессия.
+func (s *Service) manualAutoEnd(lamp *models.Lamp, now time.Time) *time.Time {
+	if lamp.Mode != "auto" {
+		return nil
+	}
+	limit := s.eveningLimit(now, lamp)
+	if limit.After(now) {
+		return &limit
+	}
+	e := now.Add(autoManualGrace)
+	return &e
 }
 
 func (s *Service) cutSession(ctx context.Context, tx pgx.Tx, lamp *models.Lamp, current *models.LampSession, now time.Time) error {
@@ -426,10 +452,19 @@ func (s *Service) cutSession(ctx context.Context, tx pgx.Tx, lamp *models.Lamp, 
 				return err
 			}
 		}
-	default: // manual — открытая сессия, хвост горит с paused_until
-		if _, err := tx.Exec(ctx, `INSERT INTO lamp_sessions (user_id, lamp_id, source, started_at, after_pause)
-			VALUES ($1,$2,'manual',$3,true)`, lamp.UserID, lamp.ID, pu); err != nil {
-			return err
+	default: // manual
+		if oldEnd != nil && oldEnd.After(pu) {
+			// ручная сессия была не открытой (в «Авто» кнопка закрыла её на вечер) — хвост сохраняет конец
+			if _, err := tx.Exec(ctx, `INSERT INTO lamp_sessions (user_id, lamp_id, source, started_at, ended_at, after_pause)
+				VALUES ($1,$2,'manual',$3,$4,true)`, lamp.UserID, lamp.ID, pu, *oldEnd); err != nil {
+				return err
+			}
+		} else {
+			// открытая ручная сессия — хвост горит с paused_until
+			if _, err := tx.Exec(ctx, `INSERT INTO lamp_sessions (user_id, lamp_id, source, started_at, after_pause)
+				VALUES ($1,$2,'manual',$3,true)`, lamp.UserID, lamp.ID, pu); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -457,6 +492,11 @@ func (s *Service) extendPause(ctx context.Context, tx pgx.Tx, lamp *models.Lamp)
 			}
 		} else if tail.Source == "schedule" && tail.EndedAt != nil && !newPause.Before(*tail.EndedAt) {
 			// расписание жёсткое — пауза съела хвост целиком
+			if _, err := tx.Exec(ctx, `DELETE FROM lamp_sessions WHERE id=$1`, tail.ID); err != nil {
+				return err
+			}
+		} else if tail.EndedAt != nil && !newPause.Before(*tail.EndedAt) {
+			// ручная сессия «Авто» с концом: пауза съела хвост целиком
 			if _, err := tx.Exec(ctx, `DELETE FROM lamp_sessions WHERE id=$1`, tail.ID); err != nil {
 				return err
 			}
@@ -527,6 +567,11 @@ func (s *Service) Resume(ctx context.Context, lamp *models.Lamp, now time.Time) 
 				return err
 			}
 		} else if tail.Source == "schedule" && tail.EndedAt != nil && !now.Before(*tail.EndedAt) {
+			if _, err := tx.Exec(ctx, `DELETE FROM lamp_sessions WHERE id=$1`, tail.ID); err != nil {
+				return err
+			}
+		} else if tail.EndedAt != nil && !now.Before(*tail.EndedAt) {
+			// ручная сессия «Авто» с концом уже завершилась к моменту «Продолжить»
 			if _, err := tx.Exec(ctx, `DELETE FROM lamp_sessions WHERE id=$1`, tail.ID); err != nil {
 				return err
 			}

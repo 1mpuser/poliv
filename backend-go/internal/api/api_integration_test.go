@@ -1264,6 +1264,116 @@ func TestAutoLampPlansDaytimePart(t *testing.T) {
 	}
 }
 
+// TestAutoLampManualToggleEndsAtEvening — ручное включение в «Авто» закрывается на «вечером не позже»:
+// сессия 18:17–23:00, а тик в 23:01 гасит розетку, а не оставляет лампу гореть всю ночь.
+func TestAutoLampManualToggleEndsAtEvening(t *testing.T) {
+	requireDB(t)
+	day := time.Date(2032, 2, 20, 0, 0, 0, 0, zoneLoc)
+	_, lampID, _, at := createAutoLamp(t, day, "dev-e1")
+	var calls []plugCall
+	setPlugCalls(&calls)
+	lamp, err := testSrv.Lamps.GetLamp(context.Background(), lampID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testSrv.Lamps.Toggle(context.Background(), lamp, at(18, 17)); err != nil {
+		t.Fatal(err)
+	}
+	var manual *lampRow
+	for _, r := range lampSessionsFor(t, lampID) {
+		if r.source == "manual" {
+			rr := r
+			manual = &rr
+		}
+	}
+	if manual == nil || !manual.startedAt.Equal(at(18, 17)) || manual.endedAt == nil || !manual.endedAt.Equal(at(23, 0)) {
+		t.Fatalf("manual session %v", manual)
+	}
+	_ = testSrv.Lamps.Tick(context.Background(), at(23, 1))
+	if !callsLast(calls, "dev-e1", false) {
+		t.Fatalf("calls after 23:01 %v", calls)
+	}
+	lamp, _ = testSrv.Lamps.GetLamp(context.Background(), lampID)
+	_ = testSrv.Lamps.Archive(context.Background(), lamp, at(23, 2))
+}
+
+// TestAutoLampManualToggleAfterEveningGrace — ручное включение в «Авто» уже после «вечером не позже»
+// закрывается через autoManualGrace: сессия 23:30–00:30.
+func TestAutoLampManualToggleAfterEveningGrace(t *testing.T) {
+	requireDB(t)
+	day := time.Date(2032, 2, 21, 0, 0, 0, 0, zoneLoc)
+	_, lampID, _, at := createAutoLamp(t, day, "dev-e2")
+	var calls []plugCall
+	setPlugCalls(&calls)
+	lamp, err := testSrv.Lamps.GetLamp(context.Background(), lampID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testSrv.Lamps.Toggle(context.Background(), lamp, at(23, 30)); err != nil {
+		t.Fatal(err)
+	}
+	var manual *lampRow
+	for _, r := range lampSessionsFor(t, lampID) {
+		if r.source == "manual" {
+			rr := r
+			manual = &rr
+		}
+	}
+	wantEnd := at(23, 30).Add(time.Hour)
+	if manual == nil || !manual.startedAt.Equal(at(23, 30)) || manual.endedAt == nil || !manual.endedAt.Equal(wantEnd) {
+		t.Fatalf("manual session %v, want end %v", manual, wantEnd)
+	}
+	if !callsLast(calls, "dev-e2", true) {
+		t.Fatalf("calls %v", calls)
+	}
+	lamp, _ = testSrv.Lamps.GetLamp(context.Background(), lampID)
+	_ = testSrv.Lamps.Archive(context.Background(), lamp, at(23, 40))
+}
+
+// TestManualLampToggleOpenSession — в режиме «Вручную» ручное включение по-прежнему оставляет
+// открытую сессию (без конца), автозакрытие применяется только к «Авто».
+func TestManualLampToggleOpenSession(t *testing.T) {
+	requireDB(t)
+	admin := adminToken(t)
+	_, tok := makeUser(t, admin, "manual-open@example.com", "user-pass-1")
+	var plant map[string]any
+	resp := req(t, "POST", "/api/plants", map[string]any{"name": "P"}, tok)
+	decode(t, resp, &plant)
+	pid := int(plant["id"].(float64))
+	var calls []plugCall
+	setPlugCalls(&calls)
+	req(t, "PUT", "/api/settings/yandex-token", map[string]any{"token": "y0_test-token-123"}, tok)
+	var lamp map[string]any
+	resp = req(t, "POST", "/api/lamps", map[string]any{"name": "M", "mode": "manual", "device_id": "dev-am",
+		"device_name": "Розетка", "plant_ids": []int{pid}}, tok)
+	decode(t, resp, &lamp)
+	lampID := int(lamp["id"].(float64))
+	day := time.Date(2032, 3, 1, 0, 0, 0, 0, zoneLoc)
+	at := func(h, m int) time.Time { return time.Date(day.Year(), day.Month(), day.Day(), h, m, 0, 0, zoneLoc) }
+	lampGet, err := testSrv.Lamps.GetLamp(context.Background(), lampID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testSrv.Lamps.Toggle(context.Background(), lampGet, at(20, 0)); err != nil {
+		t.Fatal(err)
+	}
+	var manual *lampRow
+	for _, r := range lampSessionsFor(t, lampID) {
+		if r.source == "manual" {
+			rr := r
+			manual = &rr
+		}
+	}
+	if manual == nil || !manual.startedAt.Equal(at(20, 0)) || manual.endedAt != nil {
+		t.Fatalf("manual session %v", manual)
+	}
+	if !callsLast(calls, "dev-am", true) {
+		t.Fatalf("calls %v", calls)
+	}
+	lampGet, _ = testSrv.Lamps.GetLamp(context.Background(), lampID)
+	_ = testSrv.Lamps.Archive(context.Background(), lampGet, at(21, 0))
+}
+
 func TestPlugErrorsAndArchive(t *testing.T) {
 	requireDB(t)
 	admin := adminToken(t)
@@ -1553,7 +1663,7 @@ func TestPauseCutsAllBurningSessions(t *testing.T) {
 	}
 	manualTails := afterPause(t, lampID, "manual")
 	if len(manualTails) == 0 || !manualTails[len(manualTails)-1].startedAt.Equal(at(6, 40)) ||
-		manualTails[len(manualTails)-1].endedAt != nil {
+		manualTails[len(manualTails)-1].endedAt == nil || !manualTails[len(manualTails)-1].endedAt.Equal(at(23, 0)) {
 		t.Fatalf("manual tails %v", manualTails)
 	}
 
