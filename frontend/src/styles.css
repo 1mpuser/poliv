@@ -166,6 +166,9 @@ svg.i { width: 24px; height: 24px; flex: none; fill: none; stroke: currentColor;
 .thumb img { width: 100%; height: 100%; object-fit: cover; }
 .thumb--lemon { background: radial-gradient(circle at 35% 30%, #fff6 0 18%, transparent 19%), var(--fruit-lemon); }
 .thumb--lime  { background: radial-gradient(circle at 35% 30%, #fff5 0 18%, transparent 19%), var(--fruit-lime); }
+.thumb--pothos { background: radial-gradient(circle at 70% 70%, var(--fruit-lemon) 0 22%, transparent 23%), radial-gradient(circle at 35% 30%, #fff4 0 18%, transparent 19%), var(--fruit-lime); }
+.thumb.thumb--pothos svg { transform: translate(0, 0) rotate(0deg); width: 28px; height: 28px; }
+.thumb--lg.thumb--pothos svg { transform: none; width: 38px; height: 38px; }
 .thumb svg { width: 22px; height: 22px; color: #2E4A22; fill: #5E8F3E; stroke: #2E4A22; stroke-width: 1.5; transform: translate(9px, -12px) rotate(20deg); }
 .thumb--lg { width: 72px; height: 72px; }
 .thumb--lg svg { width: 30px; height: 30px; transform: translate(13px, -17px) rotate(20deg); }

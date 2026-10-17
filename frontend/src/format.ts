@@ -83,5 +83,6 @@ export function thumbClass(p: { name: string; species: string }): string {
   const s = `${p.name} ${p.species}`.toLowerCase();
   if (s.includes('лайм') || s.includes('lime')) return 'thumb--lime';
   if (s.includes('лимон') || s.includes('lemon')) return 'thumb--lemon';
+  if (s.includes('фотос') || s.includes('потос') || s.includes('pothos') || s.includes('эпипремнум')) return 'thumb--pothos';
   return 'thumb--plant';
 }
