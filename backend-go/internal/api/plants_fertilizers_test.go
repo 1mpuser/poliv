@@ -1,7 +1,11 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -191,5 +195,55 @@ func TestPlantNoFertilizersNotLate(t *testing.T) {
 	}
 	if feed["next"] != nil || feed["due_in_days"] != nil {
 		t.Fatalf("feed %v", feed)
+	}
+}
+
+// rawBody — сырое тело ответа (проверка JSON по тексту, без распарсивания в структуру).
+func rawBody(t *testing.T, resp *http.Response) []byte {
+	t.Helper()
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return b
+}
+
+// TestPlantNoFertilizersEmptyArrays — растение без привязок отдаёт пустые массивы,
+// а не null: по сырому телу ответа проверяем "fertilizer_ids":[] и "fertilizers":[].
+func TestPlantNoFertilizersEmptyArrays(t *testing.T) {
+	requireDB(t)
+	admin := adminToken(t)
+	_, tok := makeUser(t, admin, "emptyarr@example.com", "user-pass-1")
+
+	// растение без удобрений
+	resp := req(t, "POST", "/api/plants", map[string]any{"name": "Фикус"}, tok)
+	if resp.StatusCode != 201 {
+		t.Fatalf("create -> %d", resp.StatusCode)
+	}
+	b := rawBody(t, resp)
+	if !strings.Contains(string(b), `"fertilizer_ids":[]`) {
+		t.Fatalf("создание: fertilizer_ids не пустой массив: %s", b)
+	}
+	var plant map[string]any
+	_ = json.Unmarshal(b, &plant)
+	pid := int(plant["id"].(float64))
+
+	// список растений
+	b = rawBody(t, req(t, "GET", "/api/plants", nil, tok))
+	if !strings.Contains(string(b), `"fertilizer_ids":[]`) {
+		t.Fatalf("список: fertilizer_ids не пустой массив: %s", b)
+	}
+
+	// чтение одного растения
+	b = rawBody(t, req(t, "GET", fmt.Sprintf("/api/plants/%d", pid), nil, tok))
+	if !strings.Contains(string(b), `"fertilizer_ids":[]`) {
+		t.Fatalf("чтение: fertilizer_ids не пустой массив: %s", b)
+	}
+
+	// сводка
+	b = rawBody(t, req(t, "GET", fmt.Sprintf("/api/plants/%d/summary", pid), nil, tok))
+	if !strings.Contains(string(b), `"fertilizer_ids":[]`) {
+		t.Fatalf("сводка: fertilizer_ids не пустой массив: %s", b)
+	}
+	if !strings.Contains(string(b), `"fertilizers":[]`) {
+		t.Fatalf("сводка: fertilizers не пустой массив: %s", b)
 	}
 }

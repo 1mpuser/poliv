@@ -124,6 +124,8 @@ export function PlantForm({ value, fertilizers = [], onChange }: {
   onChange: (v: PlantFields) => void;
 }) {
   const set = <K extends keyof PlantFields>(key: K, v: PlantFields[K]) => onChange({ ...value, [key]: v });
+  // старый ответ может отдать null — не даём includes/filter упасть
+  const ids = value.fertilizer_ids ?? [];
 
   return (
     <>
@@ -172,13 +174,13 @@ export function PlantForm({ value, fertilizers = [], onChange }: {
                   <label className="check" key={f.id}>
                     <input
                       type="checkbox"
-                      checked={value.fertilizer_ids.includes(f.id)}
+                      checked={ids.includes(f.id)}
                       onChange={(e) =>
                         set(
                           'fertilizer_ids',
                           e.target.checked
-                            ? [...value.fertilizer_ids, f.id]
-                            : value.fertilizer_ids.filter((x) => x !== f.id),
+                            ? [...ids, f.id]
+                            : ids.filter((x) => x !== f.id),
                         )
                       }
                     />

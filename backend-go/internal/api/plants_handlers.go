@@ -51,7 +51,12 @@ func (s *Server) listPlants(w http.ResponseWriter, r *http.Request, user *models
 	out := make([]schema.PlantOut, 0, len(plants))
 	for _, p := range plants {
 		outP := plantToSchema(&p, s.Zone)
-		outP.FertilizerIDs = idsByPlant[p.ID]
+		// у растения без записей в plant_fertilizers ключа в map нет — отдаём пустой массив, а не null
+		if ids, ok := idsByPlant[p.ID]; ok {
+			outP.FertilizerIDs = ids
+		} else {
+			outP.FertilizerIDs = []int{}
+		}
 		out = append(out, *outP)
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -417,6 +422,7 @@ func plantToSchema(p *models.Plant, zone *time.Location) *schema.PlantOut {
 			LightTargetHours: render.F(p.LightTargetHours), RepotCheckMonths: p.RepotCheckIntervalMonths,
 		},
 		ID: p.ID, AddedAt: render.Time(p.AddedAt, zone),
+		FertilizerIDs: []int{},
 	}
 }
 

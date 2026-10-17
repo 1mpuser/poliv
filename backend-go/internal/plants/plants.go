@@ -112,7 +112,8 @@ func (s *Service) FertilizerIDsForPlant(ctx context.Context, plantID int) ([]int
 		return nil, err
 	}
 	defer rows.Close()
-	var out []int
+	// не nil: у растения без привязок отдаём пустой массив, а не null
+	out := []int{}
 	for rows.Next() {
 		var id int
 		if err := rows.Scan(&id); err != nil {
@@ -250,6 +251,7 @@ func (s *Service) buildSummary(ctx context.Context, plant *models.Plant, setting
 	repot := summary.RepotStateOf(lastRepot, plant.AddedAt, plant.RepotCheckIntervalMonths, now, zone)
 
 	plantOut := plantToOut(plant, zone)
+	plantOut.FertilizerIDs = fertIDsFrom(ferts)
 	feedOut := feedSummary(plant, lastFed, lastFertName, feed, zone)
 	feedOut.Next = fertToSchema(ferts, feed.Next)
 
@@ -417,7 +419,17 @@ func plantToOut(p *models.Plant, zone *time.Location) *schema.PlantOut {
 			LightTargetHours: render.F(p.LightTargetHours), RepotCheckMonths: p.RepotCheckIntervalMonths,
 		},
 		ID: p.ID, AddedAt: render.Time(p.AddedAt, zone),
+		FertilizerIDs: []int{},
 	}
+}
+
+// fertIDsFrom — id удобрений из набора растения (для PlantOut.fertilizer_ids, всегда не nil).
+func fertIDsFrom(ferts []summary.Fertilizer) []int {
+	out := make([]int, len(ferts))
+	for i, f := range ferts {
+		out[i] = f.ID
+	}
+	return out
 }
 
 func feedSummary(plant *models.Plant, lastFed models.FeedingLog, lastFertName *string, feed summary.FeedState, zone *time.Location) schema.FeedSummary {

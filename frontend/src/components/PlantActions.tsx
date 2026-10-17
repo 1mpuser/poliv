@@ -149,7 +149,8 @@ function FeedForm({
   onCancel: () => void;
 }) {
   // Удобрения растения — только его набор, следующее по кругу предзаполнено
-  const fertilizers = s.fertilizers;
+  // старый ответ может отдать null — не даём find/map упасть
+  const fertilizers = s.fertilizers ?? [];
   // Предзаполнено предложенным следующим типом
   const [fertId, setFertId] = useState<number | undefined>(s.feed.next?.id ?? fertilizers[0]?.id);
   const [method, setMethod] = useState<FeedMethod>('root');
