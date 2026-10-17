@@ -26,6 +26,7 @@ type Plant struct {
 	Notes                      *string
 	WaterIntervalDays          int
 	FertilizingEnabled         bool
+	FertilizingIntervalDays    *int
 	LightTargetHours           float64
 	RepotCheckIntervalMonths   int
 }

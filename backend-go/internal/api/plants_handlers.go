@@ -19,7 +19,7 @@ import (
 
 func (s *Server) ownedPlant(ctx context.Context, plantID, userID int) (*models.Plant, error) {
 	row := s.Pool.QueryRow(ctx, `SELECT id, user_id, name, species, location, pot_size_l, added_at, notes,
-		water_interval_days, fertilizing_enabled, light_target_hours, repot_check_interval_months
+		water_interval_days, fertilizing_enabled, fertilizing_interval_days, light_target_hours, repot_check_interval_months
 		FROM plants WHERE id=$1 AND user_id=$2`, plantID, userID)
 	p, err := plants.ScanPlant(row)
 	if err == pgx.ErrNoRows {
@@ -43,9 +43,16 @@ func (s *Server) listPlants(w http.ResponseWriter, r *http.Request, user *models
 		writeDetail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	idsByPlant, err := s.Plants.FertilizerIDsByUser(r.Context(), user.ID)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	out := make([]schema.PlantOut, 0, len(plants))
 	for _, p := range plants {
-		out = append(out, *plantToSchema(&p, s.Zone))
+		outP := plantToSchema(&p, s.Zone)
+		outP.FertilizerIDs = idsByPlant[p.ID]
+		out = append(out, *outP)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -61,7 +68,14 @@ func (s *Server) getPlant(w http.ResponseWriter, r *http.Request, user *models.U
 		writeDetail(w, http.StatusNotFound, "Растение не найдено")
 		return
 	}
-	writeJSON(w, http.StatusOK, plantToSchema(p, s.Zone))
+	ids, err := s.Plants.FertilizerIDsForPlant(r.Context(), p.ID)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := plantToSchema(p, s.Zone)
+	out.FertilizerIDs = ids
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) createPlant(w http.ResponseWriter, r *http.Request, user *models.User) {
@@ -84,12 +98,29 @@ func (s *Server) createPlant(w http.ResponseWriter, r *http.Request, user *model
 	lightH := floatOr(b, "light_target_hours", 12)
 	repotM := intOr(b, "repot_check_interval_months", 12)
 	_ = summary.LocalDate
+	fertInterval := bInt(b, "fertilizing_interval_days")
+	if fertInterval != nil && *fertInterval <= 0 {
+		writeValidation(w, []any{"интервал подкормки должен быть больше нуля"})
+		return
+	}
+	fertIDs, _ := b.intList("fertilizer_ids")
+	if fertIDs == nil {
+		fertIDs = []int{}
+	}
+	if err := s.ensureOwnedFertilizers(r.Context(), fertIDs, user.ID); err != nil {
+		writeDetail(w, http.StatusNotFound, "Удобрение не найдено")
+		return
+	}
 	var id int
 	err = s.Pool.QueryRow(r.Context(), `INSERT INTO plants
-		(user_id, name, species, location, pot_size_l, notes, water_interval_days, fertilizing_enabled, light_target_hours, repot_check_interval_months)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
-		user.ID, name, species, location, potSize, notes, water, fert, lightH, repotM).Scan(&id)
+		(user_id, name, species, location, pot_size_l, notes, water_interval_days, fertilizing_enabled, fertilizing_interval_days, light_target_hours, repot_check_interval_months)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+		user.ID, name, species, location, potSize, notes, water, fert, fertInterval, lightH, repotM).Scan(&id)
 	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := s.replacePlantFertilizers(r.Context(), id, fertIDs); err != nil {
 		writeDetail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -98,7 +129,14 @@ func (s *Server) createPlant(w http.ResponseWriter, r *http.Request, user *model
 		writeDetail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, plantToSchema(p, s.Zone))
+	ids, err := s.Plants.FertilizerIDsForPlant(r.Context(), id)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := plantToSchema(p, s.Zone)
+	out.FertilizerIDs = ids
+	writeJSON(w, http.StatusCreated, out)
 }
 
 func (s *Server) updatePlant(w http.ResponseWriter, r *http.Request, user *models.User) {
@@ -138,11 +176,33 @@ func (s *Server) updatePlant(w http.ResponseWriter, r *http.Request, user *model
 	if b.has("fertilizing_enabled") {
 		set["fertilizing_enabled"] = boolOr(b, "fertilizing_enabled", false)
 	}
+	if b.has("fertilizing_interval_days") {
+		iv := bInt(b, "fertilizing_interval_days")
+		if iv != nil && *iv <= 0 {
+			writeValidation(w, []any{"интервал подкормки должен быть больше нуля"})
+			return
+		}
+		set["fertilizing_interval_days"] = iv
+	}
 	if b.has("light_target_hours") {
 		set["light_target_hours"] = floatOr(b, "light_target_hours", 0)
 	}
 	if b.has("repot_check_interval_months") {
 		set["repot_check_interval_months"] = intOr(b, "repot_check_interval_months", 0)
+	}
+	if b.has("fertilizer_ids") {
+		fertIDs, _ := b.intList("fertilizer_ids")
+		if fertIDs == nil {
+			fertIDs = []int{}
+		}
+		if err := s.ensureOwnedFertilizers(r.Context(), fertIDs, user.ID); err != nil {
+			writeDetail(w, http.StatusNotFound, "Удобрение не найдено")
+			return
+		}
+		if err := s.replacePlantFertilizers(r.Context(), id, fertIDs); err != nil {
+			writeDetail(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 	if err := applySet(r.Context(), s.Pool, "plants", id, set); err != nil {
 		writeDetail(w, http.StatusInternalServerError, err.Error())
@@ -153,7 +213,14 @@ func (s *Server) updatePlant(w http.ResponseWriter, r *http.Request, user *model
 		writeDetail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, plantToSchema(p, s.Zone))
+	ids, err := s.Plants.FertilizerIDsForPlant(r.Context(), id)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := plantToSchema(p, s.Zone)
+	out.FertilizerIDs = ids
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) deletePlant(w http.ResponseWriter, r *http.Request, user *models.User) {
@@ -184,11 +251,6 @@ func (s *Server) allSummaries(w http.ResponseWriter, r *http.Request, user *mode
 		writeDetail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	ferts, err := s.Plants.FertilizersForUser(r.Context(), user.ID)
-	if err != nil {
-		writeDetail(w, http.StatusInternalServerError, err.Error())
-		return
-	}
 	now := time.Now().UTC()
 	daylight, err := s.currentDaylight(r.Context(), user.ID)
 	if err != nil {
@@ -196,9 +258,8 @@ func (s *Server) allSummaries(w http.ResponseWriter, r *http.Request, user *mode
 		return
 	}
 	out := make([]schema.PlantSummary, 0, len(ids))
-	summaryFerts := plants.ToSummaryFerts(ferts)
 	for i := range ids {
-		ss, err := s.Plants.BuildOne(r.Context(), &ids[i], settings, summaryFerts, now, daylight)
+		ss, err := s.Plants.BuildOne(r.Context(), &ids[i], settings, now, daylight)
 		if err != nil {
 			writeDetail(w, http.StatusInternalServerError, err.Error())
 			return
@@ -352,10 +413,40 @@ func plantToSchema(p *models.Plant, zone *time.Location) *schema.PlantOut {
 			Name: p.Name, Species: p.Species, Location: p.Location,
 			PotSizeL: render.MarshalF(p.PotSizeL), Notes: p.Notes,
 			WaterIntervalDays: p.WaterIntervalDays, FertilizingEnabled: p.FertilizingEnabled,
+			FertilizingIntervalDays: p.FertilizingIntervalDays,
 			LightTargetHours: render.F(p.LightTargetHours), RepotCheckMonths: p.RepotCheckIntervalMonths,
 		},
 		ID: p.ID, AddedAt: render.Time(p.AddedAt, zone),
 	}
+}
+
+// ensureOwnedFertilizers — каждое id должно быть удобрением текущей учётки, иначе 404.
+func (s *Server) ensureOwnedFertilizers(ctx context.Context, ids []int, userID int) error {
+	for _, id := range ids {
+		if _, err := s.ownedFertilizer(ctx, id, userID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// replacePlantFertilizers — заменяет набор удобрений растения целиком.
+func (s *Server) replacePlantFertilizers(ctx context.Context, plantID int, ids []int) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `DELETE FROM plant_fertilizers WHERE plant_id=$1`, plantID); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if _, err := tx.Exec(ctx, `INSERT INTO plant_fertilizers (plant_id, fertilizer_type_id) VALUES ($1,$2)`,
+			plantID, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 func getUserSettingsFor(ctx context.Context, s *Server, userID int) (*models.UserSettings, error) {

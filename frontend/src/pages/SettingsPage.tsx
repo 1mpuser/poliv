@@ -34,6 +34,7 @@ export function SettingsPage({ onLogout }: { onLogout: () => void }) {
   const [params, setParams] = useSearchParams();
   const { data, reload } = useAsync(() => Promise.all([api.plants(), api.settings()]), []);
   const { data: lamps, reload: reloadLamps } = useAsync(() => api.lamps(), []);
+  const { data: fertilizers } = useAsync(() => api.fertilizers(), []);
 
   // Черновики: сохраняются одной кнопкой «Сохранить», как в макете
   const [drafts, setDrafts] = useState<Record<number, PlantFields>>({});
@@ -147,6 +148,7 @@ export function SettingsPage({ onLogout }: { onLogout: () => void }) {
                   <PlantForm
                     key={selectedId}
                     value={draft}
+                    fertilizers={fertilizers ?? []}
                     onChange={(v) => setDrafts((d) => ({ ...d, [selectedId!]: v }))}
                   />
                 )}

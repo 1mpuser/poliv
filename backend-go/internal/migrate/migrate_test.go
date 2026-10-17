@@ -85,4 +85,22 @@ func TestUpOnExistingSchema(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT version_num FROM alembic_version`).Scan(&alembic); err != nil || alembic != "0005" {
 		t.Fatalf("alembic_version после Up: %q (err %v), ждём 0005", alembic, err)
 	}
+
+	// Миграция 0005 привязала существующим растениям все удобрения их учётки:
+	// в базовом наборе 2 растения и 2 удобрения у одного владельца → 4 строки.
+	var backfill int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM plant_fertilizers`).Scan(&backfill); err != nil {
+		t.Fatalf("check plant_fertilizers: %v", err)
+	}
+	if backfill != 4 {
+		t.Fatalf("plant_fertilizers после бэкфилла: %d, ждём 4", backfill)
+	}
+	var unbound int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM plants p
+		WHERE NOT EXISTS (SELECT 1 FROM plant_fertilizers pf WHERE pf.plant_id=p.id)`).Scan(&unbound); err != nil {
+		t.Fatalf("check unbound plants: %v", err)
+	}
+	if unbound != 0 {
+		t.Fatalf("растений без удобрений: %d, ждём 0", unbound)
+	}
 }

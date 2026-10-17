@@ -4,10 +4,12 @@ import { api } from '../api';
 import { Icon } from '../components/icons';
 import { EMPTY_PLANT, PlantForm } from '../components/PlantForm';
 import { useToast } from '../components/toast';
+import { useAsync } from '../useAsync';
 
 export function NewPlant() {
   const navigate = useNavigate();
   const toast = useToast();
+  const { data: fertilizers } = useAsync(() => api.fertilizers(), []);
   const [draft, setDraft] = useState(EMPTY_PLANT);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -42,7 +44,7 @@ export function NewPlant() {
           }
         }}
       >
-        <PlantForm value={draft} onChange={setDraft} />
+        <PlantForm value={draft} fertilizers={fertilizers ?? []} onChange={setDraft} />
         {error && <p className="form-error" role="alert" style={{ marginTop: 12 }}>{error}</p>}
         <div className="save-bar">
           <button className="btn-primary" type="submit" disabled={busy}>Добавить</button>

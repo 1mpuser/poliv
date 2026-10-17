@@ -175,7 +175,7 @@ func TestFeedDueUsesNextTypeInterval(t *testing.T) {
 	lomo := ft(1, 14, 30)
 	bona := ft(2, 10, 0)
 	now := msk(2026, 9, 23, 12)
-	s := summary.FeedStateOf(true, []summary.Fertilizer{lomo, bona}, tp(msk(2026, 9, 15, 9)), tpi(1), "active", 1, now, mskLoc)
+	s := summary.FeedStateOf(true, []summary.Fertilizer{lomo, bona}, tp(msk(2026, 9, 15, 9)), tpi(1), "active", 1, now, mskLoc, nil)
 	if s.Next == nil || s.Next.ID != 2 || s.IntervalDays == nil || *s.IntervalDays != 10 {
 		t.Fatalf("got %+v", s)
 	}
@@ -190,7 +190,7 @@ func TestFeedDueUsesNextTypeInterval(t *testing.T) {
 func TestFeedDormantWithoutIntervalIsOff(t *testing.T) {
 	lomo := ft(1, 14, 30)
 	bona := ft(2, 10, 0)
-	s := summary.FeedStateOf(true, []summary.Fertilizer{lomo, bona}, tp(msk(2026, 9, 15)), tpi(1), "dormant", 1, msk(2026, 9, 23), mskLoc)
+	s := summary.FeedStateOf(true, []summary.Fertilizer{lomo, bona}, tp(msk(2026, 9, 15)), tpi(1), "dormant", 1, msk(2026, 9, 23), mskLoc, nil)
 	if s.Next == nil || s.Next.ID != 2 || s.Status != "off" || s.DueDate != nil {
 		t.Fatalf("got %+v", s)
 	}
@@ -199,7 +199,7 @@ func TestFeedDormantWithoutIntervalIsOff(t *testing.T) {
 func TestFeedDisabledIsOff(t *testing.T) {
 	lomo := ft(1, 14, 30)
 	bona := ft(2, 10, 0)
-	s := summary.FeedStateOf(false, []summary.Fertilizer{lomo, bona}, nil, nil, "active", 1, msk(2026, 9, 23), mskLoc)
+	s := summary.FeedStateOf(false, []summary.Fertilizer{lomo, bona}, nil, nil, "active", 1, msk(2026, 9, 23), mskLoc, nil)
 	if s.Status != "off" || s.Next == nil || s.Next.ID != 1 {
 		t.Fatalf("got %+v", s)
 	}
@@ -207,8 +207,48 @@ func TestFeedDisabledIsOff(t *testing.T) {
 
 func TestFeedNeverFedIsDueToday(t *testing.T) {
 	lomo := ft(1, 14, 30)
-	s := summary.FeedStateOf(true, []summary.Fertilizer{lomo}, nil, nil, "active", 1, msk(2026, 9, 23), mskLoc)
+	s := summary.FeedStateOf(true, []summary.Fertilizer{lomo}, nil, nil, "active", 1, msk(2026, 9, 23), mskLoc, nil)
 	if s.DueInDays == nil || *s.DueInDays != 0 || s.Status != "late" {
+		t.Fatalf("got %+v", s)
+	}
+}
+
+// TestFeedNoFertilizersIsOff — у растения нет привязанных удобрений: подкормка выключена,
+// следующего удобрения нет, не «просрочена».
+func TestFeedNoFertilizersIsOff(t *testing.T) {
+	s := summary.FeedStateOf(true, nil, nil, nil, "active", 1, msk(2026, 9, 23), mskLoc, nil)
+	if s.Status != "off" || s.Next != nil || s.DueInDays != nil || s.DueDate != nil {
+		t.Fatalf("got %+v", s)
+	}
+}
+
+// TestFeedPlantIntervalOverridesActive — свой интервал растения заменяет интервал типа в активный сезон.
+func TestFeedPlantIntervalOverridesActive(t *testing.T) {
+	lomo := ft(1, 14, 30)
+	s := summary.FeedStateOf(true, []summary.Fertilizer{lomo}, tp(msk(2026, 9, 15, 9)), tpi(1), "active", 1, msk(2026, 9, 23), mskLoc, tpi(7))
+	if s.Next == nil || s.Next.ID != 1 || s.IntervalDays == nil || *s.IntervalDays != 7 {
+		t.Fatalf("got %+v", s)
+	}
+	if s.DueDate == nil || !s.DueDate.Equal(mkdate(2026, 9, 22)) || s.DueInDays == nil || *s.DueInDays != -1 || s.Status != "late" {
+		t.Fatalf("got %+v", s)
+	}
+}
+
+// TestFeedPlantIntervalOverridesDormant — свой интервал растения действует и в спящий сезон,
+// даже если у типа для покоя интервала нет.
+func TestFeedPlantIntervalOverridesDormant(t *testing.T) {
+	bona := ft(2, 10, 0)
+	s := summary.FeedStateOf(true, []summary.Fertilizer{bona}, tp(msk(2026, 9, 15, 9)), tpi(2), "dormant", 1, msk(2026, 9, 23), mskLoc, tpi(7))
+	if s.IntervalDays == nil || *s.IntervalDays != 7 || s.DueInDays == nil || *s.DueInDays != -1 || s.Status != "late" {
+		t.Fatalf("got %+v", s)
+	}
+}
+
+// TestFeedPlantIntervalNilFallsBackToType — интервал не задан: берём интервал типа для сезона.
+func TestFeedPlantIntervalNilFallsBackToType(t *testing.T) {
+	lomo := ft(1, 14, 30)
+	s := summary.FeedStateOf(true, []summary.Fertilizer{lomo}, tp(msk(2026, 9, 15, 9)), tpi(1), "active", 1, msk(2026, 9, 23), mskLoc, nil)
+	if s.IntervalDays == nil || *s.IntervalDays != 14 {
 		t.Fatalf("got %+v", s)
 	}
 }

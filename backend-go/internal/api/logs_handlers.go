@@ -194,6 +194,15 @@ func (s *Server) createFeeding(w http.ResponseWriter, r *http.Request, user *mod
 		writeDetail(w, http.StatusNotFound, "Удобрение не найдено")
 		return
 	}
+	if fertID != 0 {
+		if ok, err := s.fertilizerInPlant(r.Context(), plantID, fertID); err != nil {
+			writeDetail(w, http.StatusInternalServerError, err.Error())
+			return
+		} else if !ok {
+			writeDetail(w, http.StatusUnprocessableEntity, "Это удобрение не входит в набор растения")
+			return
+		}
+	}
 	method := strOr(b, "method", "root")
 	fedAt, err := b.timeField("fed_at")
 	if err != nil {
@@ -290,6 +299,15 @@ func (s *Server) updateFeeding(w http.ResponseWriter, r *http.Request, user *mod
 			writeDetail(w, http.StatusNotFound, "Удобрение не найдено")
 			return
 		}
+		if fid != 0 {
+			if ok, err := s.fertilizerInPlant(ctx, log.PlantID, fid); err != nil {
+				writeDetail(w, http.StatusInternalServerError, err.Error())
+				return
+			} else if !ok {
+				writeDetail(w, http.StatusUnprocessableEntity, "Это удобрение не входит в набор растения")
+				return
+			}
+		}
 		set["fertilizer_type_id"] = fid
 	}
 	newMethod := log.Method
@@ -372,6 +390,14 @@ func (s *Server) deleteFeeding(w http.ResponseWriter, r *http.Request, user *mod
 // querier — общий интерфейс для *pgxpool.Pool и pgx.Tx, чтобы проверки работали и в транзакции.
 type querier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// fertilizerInPlant — входит ли удобрение в набор растения.
+func (s *Server) fertilizerInPlant(ctx context.Context, plantID, fertID int) (bool, error) {
+	var ok bool
+	err := s.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM plant_fertilizers WHERE plant_id=$1 AND fertilizer_type_id=$2)`,
+		plantID, fertID).Scan(&ok)
+	return ok, err
 }
 
 const autoWaterNote = "с подкормкой"

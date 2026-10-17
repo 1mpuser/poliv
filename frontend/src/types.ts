@@ -11,9 +11,13 @@ export interface PlantFields {
   notes: string | null;
   water_interval_days: number;
   fertilizing_enabled: boolean;
+  /** Свой интервал подкормки (дней). null — как у удобрения */
+  fertilizing_interval_days: number | null;
   /** Норма всего света в день: солнце + лампа */
   light_target_hours: number;
   repot_check_interval_months: number;
+  /** Удобрения этого растения (только из учётки) */
+  fertilizer_ids: number[];
 }
 
 export interface Plant extends PlantFields {
@@ -64,6 +68,8 @@ export interface PlantSummary {
     is_on: boolean;
     open_session_id: number | null;
   };
+  /** Удобрения этого растения (только его набор) */
+  fertilizers: Fertilizer[];
   light: LightSummary;
   repot: {
     last_at: string | null;

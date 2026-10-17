@@ -224,8 +224,15 @@ func TestFeedingForeign404(t *testing.T) {
 
 func createPlantFor(t *testing.T, token, name string) int {
 	t.Helper()
+	// привязываем все удобрения учётки — как у существующих растений после бэкфилла
+	var ferts []map[string]any
+	getJSON(t, "/api/fertilizers", token, &ferts)
+	ids := make([]int, 0, len(ferts))
+	for _, f := range ferts {
+		ids = append(ids, int(f["id"].(float64)))
+	}
 	var plant map[string]any
-	resp := req(t, "POST", "/api/plants", map[string]any{"name": name}, token)
+	resp := req(t, "POST", "/api/plants", map[string]any{"name": name, "fertilizer_ids": ids}, token)
 	if resp.StatusCode != 201 {
 		t.Fatalf("create plant -> %d", resp.StatusCode)
 	}

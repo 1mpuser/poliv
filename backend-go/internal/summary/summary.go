@@ -157,7 +157,10 @@ type FeedState struct {
 	Status      string
 }
 
-func FeedStateOf(enabled bool, types []Fertilizer, lastFedAt *time.Time, lastTypeID *int, season string, ahead int, now time.Time, loc *time.Location) FeedState {
+// FeedStateOf — состояние подкормки растения. plantInterval (nullable) — свой интервал
+// растения (plants.fertilizing_interval_days): если задан, заменяет интервал типа удобрения
+// и в активный, и в спящий сезон. types — набор удобрений, привязанных к растению.
+func FeedStateOf(enabled bool, types []Fertilizer, lastFedAt *time.Time, lastTypeID *int, season string, ahead int, now time.Time, loc *time.Location, plantInterval *int) FeedState {
 	today := LocalDate(now, loc)
 	var daysSince *int
 	if lastFedAt != nil {
@@ -167,7 +170,11 @@ func FeedStateOf(enabled bool, types []Fertilizer, lastFedAt *time.Time, lastTyp
 	nxt := PickNextFertilizer(types, lastTypeID)
 	var interval *int
 	if nxt != nil {
-		interval = SeasonInterval(*nxt, season)
+		if plantInterval != nil {
+			interval = plantInterval
+		} else {
+			interval = SeasonInterval(*nxt, season)
+		}
 	}
 	if !enabled || nxt == nil || interval == nil {
 		return FeedState{nxt, interval, nil, nil, daysSince, "off"}

@@ -2,14 +2,13 @@ import { useState, type CSSProperties } from 'react';
 import { api } from '../api';
 import { fmtTime } from '../format';
 import { plugIssue } from '../lamp';
-import type { FeedMethod, Fertilizer, PlantSummary } from '../types';
+import type { FeedMethod, PlantSummary } from '../types';
 import { Segmented, Sheet } from './controls';
 import { Icon } from './icons';
 import { useToast } from './toast';
 
 interface Props {
   s: PlantSummary;
-  fertilizers: Fertilizer[];
   /** Перезапросить сводку после действия или отмены */
   onChanged: () => void;
   style?: CSSProperties;
@@ -18,7 +17,7 @@ interface Props {
 const NETWORK_ERROR = 'Не удалось записать. Проверьте интернет и нажмите ещё раз.';
 
 /** «Полить / Подкормить / Лампа» + тост с отменой (поведение из макета) */
-export function PlantActions({ s, fertilizers, onChanged, style }: Props) {
+export function PlantActions({ s, onChanged, style }: Props) {
   const toast = useToast();
   const [busy, setBusy] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
@@ -134,7 +133,7 @@ export function PlantActions({ s, fertilizers, onChanged, style }: Props) {
         )}
       </div>
       <Sheet open={feedOpen} onClose={() => setFeedOpen(false)}>
-        <FeedForm s={s} fertilizers={fertilizers} onSubmit={feed} onCancel={() => setFeedOpen(false)} />
+        <FeedForm s={s} onSubmit={feed} onCancel={() => setFeedOpen(false)} />
       </Sheet>
     </>
   );
@@ -142,15 +141,15 @@ export function PlantActions({ s, fertilizers, onChanged, style }: Props) {
 
 function FeedForm({
   s,
-  fertilizers,
   onSubmit,
   onCancel,
 }: {
   s: PlantSummary;
-  fertilizers: Fertilizer[];
   onSubmit: (fertilizerId: number, method: FeedMethod) => void;
   onCancel: () => void;
 }) {
+  // Удобрения растения — только его набор, следующее по кругу предзаполнено
+  const fertilizers = s.fertilizers;
   // Предзаполнено предложенным следующим типом
   const [fertId, setFertId] = useState<number | undefined>(s.feed.next?.id ?? fertilizers[0]?.id);
   const [method, setMethod] = useState<FeedMethod>('root');

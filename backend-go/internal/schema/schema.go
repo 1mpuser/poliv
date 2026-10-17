@@ -15,14 +15,16 @@ type PlantFields struct {
 	Notes                 *string       `json:"notes"`
 	WaterIntervalDays     int           `json:"water_interval_days"`
 	FertilizingEnabled    bool          `json:"fertilizing_enabled"`
+	FertilizingIntervalDays *int        `json:"fertilizing_interval_days"`
 	LightTargetHours      render.F      `json:"light_target_hours"`
 	RepotCheckMonths      int           `json:"repot_check_interval_months"`
 }
 
 type PlantOut struct {
 	PlantFields
-	ID      int    `json:"id"`
-	AddedAt string `json:"added_at"`
+	ID            int    `json:"id"`
+	AddedAt       string `json:"added_at"`
+	FertilizerIDs []int  `json:"fertilizer_ids"`
 }
 
 type Fertilizer struct {
@@ -206,13 +208,14 @@ type RepotSummary struct {
 }
 
 type PlantSummary struct {
-	Plant  PlantOut      `json:"plant"`
-	Season string        `json:"season"`
-	Water  WaterSummary  `json:"water"`
-	Feed   FeedSummary   `json:"feed"`
-	Lamp   LampSummary   `json:"lamp"`
-	Light  LightSummary  `json:"light"`
-	Repot  RepotSummary  `json:"repot"`
+	Plant       PlantOut       `json:"plant"`
+	Season      string         `json:"season"`
+	Water       WaterSummary   `json:"water"`
+	Feed        FeedSummary    `json:"feed"`
+	Fertilizers []Fertilizer   `json:"fertilizers"`
+	Lamp        LampSummary    `json:"lamp"`
+	Light       LightSummary   `json:"light"`
+	Repot       RepotSummary   `json:"repot"`
 }
 
 type HistoryEvent struct {

@@ -30,9 +30,14 @@ PATCH меняет только переданные поля; явный `null`
 | GET / POST | `/plants` | Список / создать |
 | GET | `/plants/summary` | **Сводки всех растений одним запросом** (дашборд) |
 | GET / PATCH / DELETE | `/plants/{id}` | |
-| GET | `/plants/{id}/summary` | Сводка: `water` (последний полив и проверка грунта, статус по последнему касанию), `feed` (следующее удобрение и срок), `lamp` (часы сегодня), `repot` |
+| GET | `/plants/{id}/summary` | Сводка: `water` (последний полив и проверка грунта, статус по последнему касанию), `feed` (следующее удобрение и срок) + `fertilizers` (набор растения), `lamp` (часы сегодня), `repot` |
 | GET | `/plants/{id}/history` | Лента событий; `?types=water&types=check`, `date_from`, `date_to` (YYYY-MM-DD) |
 | GET | `/plants/{id}/stats/weekly` | `?weeks=8` (1–52): поливы, подкормки, часы лампы по неделям |
+
+У растения (создание и PATCH) есть поля набора удобрений: `fertilizer_ids: int[]` (чужое или
+несуществующее удобрение → 404) и `fertilizing_interval_days: int|null` (свой интервал подкормки,
+`null` — как у удобрения; `<1` → 400). PATCH меняет только переданные поля, явный `null` интервала
+значимый — снова «как у удобрения».
 
 ## Журналы
 
@@ -42,7 +47,7 @@ PATCH меняет только переданные поля; явный `null`
 |---|---|---|
 | `waterings` | `{plant_id, watered_at?, note?}` | время по умолчанию — сейчас |
 | `checks` | `POST /plants/{id}/checks` (пусто, 201 → `{id, plant_id, checked_at}`) · `DELETE /checks/{id}` | «проверил грунт» — сбрасывает счётчик растения |
-| `feedings` | `{plant_id, fertilizer_type_id, method: root\|foliar, fed_at?, note?}` | `method=root` (по умолчанию) в той же транзакции создаёт полив (`watering_logs`), если в этот день полива ещё не было; удаление корневой подкормки убирает её автополив. `foliar` полив не создаёт |
+| `feedings` | `{plant_id, fertilizer_type_id, method: root\|foliar, fed_at?, note?}` | `method=root` (по умолчанию) в той же транзакции создаёт полив (`watering_logs`), если в этот день полива ещё не было; удаление корневой подкормки убирает её автополив. `foliar` полив не создаёт. Удобрение не из набора растения — **422** |
 | `repottings` | `{plant_id, repotted_at?, pot_size_before?, pot_size_after?, note?}` | обновляет `pot_size_l` растения |
 
 ## Свет

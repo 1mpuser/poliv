@@ -1,6 +1,6 @@
 import { useEffect, useId, useState } from 'react';
 import { DAYS, HOURS, MONTHS } from '../format';
-import type { PlantFields } from '../types';
+import type { Fertilizer, PlantFields } from '../types';
 import { Field, Stepper, Switch } from './controls';
 
 export const EMPTY_PLANT: PlantFields = {
@@ -11,8 +11,10 @@ export const EMPTY_PLANT: PlantFields = {
   notes: null,
   water_interval_days: 4,
   fertilizing_enabled: true,
+  fertilizing_interval_days: null,
   light_target_hours: 13,
   repot_check_interval_months: 12,
+  fertilizer_ids: [],
 };
 
 function TextField({
@@ -84,8 +86,43 @@ function DecimalField({ label, value, onChange, placeholder }: {
   );
 }
 
+/** Целое число дней: пустое поле — null («как у удобрения») */
+function IntField({ label, value, onChange, placeholder }: {
+  label: string;
+  value: number | null;
+  onChange: (v: number | null) => void;
+  placeholder?: string;
+}) {
+  const [raw, setRaw] = useState(value == null ? '' : String(value));
+  useEffect(() => {
+    const cur = raw.trim() === '' ? null : Number(raw);
+    if (cur !== value) setRaw(value == null ? '' : String(value));
+  }, [value]);
+  return (
+    <TextField
+      label={label}
+      inputMode="decimal"
+      value={raw}
+      placeholder={placeholder}
+      onChange={(v) => {
+        setRaw(v);
+        if (v.trim() === '') onChange(null);
+        else {
+          const n = Number(v);
+          onChange(Number.isNaN(n) ? null : Math.max(1, Math.round(n)));
+        }
+      }}
+    />
+  );
+}
+
 /** Поля растения: описание + настройки ухода. Контролируемая форма. */
-export function PlantForm({ value, onChange }: { value: PlantFields; onChange: (v: PlantFields) => void }) {
+export function PlantForm({ value, fertilizers = [], onChange }: {
+  value: PlantFields;
+  /** Типы удобрений учётки — для галочек выбора набора растения */
+  fertilizers?: Fertilizer[];
+  onChange: (v: PlantFields) => void;
+}) {
   const set = <K extends keyof PlantFields>(key: K, v: PlantFields[K]) => onChange({ ...value, [key]: v });
 
   return (
@@ -121,6 +158,43 @@ export function PlantForm({ value, onChange }: { value: PlantFields; onChange: (
             />
           )}
         </Field>
+      </div>
+
+      <h2 className="section__title" style={{ marginTop: 20 }}>Подкормка</h2>
+      <div className="form-group">
+        <Field label="Удобрения" hint="Из этих подкармливать — чередуются по кругу">
+          {(id) => (
+            <div className="fert-checks" aria-labelledby={id}>
+              {fertilizers.length === 0 ? (
+                <span className="field__hint">Сначала добавьте удобрения в разделе «Удобрения» ниже.</span>
+              ) : (
+                fertilizers.map((f) => (
+                  <label className="check" key={f.id}>
+                    <input
+                      type="checkbox"
+                      checked={value.fertilizer_ids.includes(f.id)}
+                      onChange={(e) =>
+                        set(
+                          'fertilizer_ids',
+                          e.target.checked
+                            ? [...value.fertilizer_ids, f.id]
+                            : value.fertilizer_ids.filter((x) => x !== f.id),
+                        )
+                      }
+                    />
+                    <span className="check__name">{f.name}</span>
+                  </label>
+                ))
+              )}
+            </div>
+          )}
+        </Field>
+        <IntField
+          label="Подкармливать раз в (дней)"
+          value={value.fertilizing_interval_days}
+          placeholder="пусто — как у удобрения"
+          onChange={(v) => set('fertilizing_interval_days', v)}
+        />
       </div>
     </>
   );

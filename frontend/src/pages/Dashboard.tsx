@@ -38,10 +38,10 @@ function priority(s: PlantSummary): number {
 export function Dashboard() {
   const toast = useToast();
   const { data, error, reload } = useAsync(
-    () => Promise.all([api.summaries(), api.fertilizers(), api.lamps()]),
+    () => Promise.all([api.summaries(), api.lamps()]),
     [],
   );
-  const [summaries, fertilizers, lamps] = data ?? [undefined, [], []];
+  const [summaries, lamps] = data ?? [undefined, []];
 
   async function toggle(l: Lamp) {
     try {
@@ -109,7 +109,7 @@ export function Dashboard() {
           ?.slice()
           .sort((a, b) => priority(a) - priority(b))
           .map((s) => (
-            <PlantCard key={s.plant.id} s={s} fertilizers={fertilizers} onChanged={reload} />
+            <PlantCard key={s.plant.id} s={s} onChanged={reload} />
           ))}
         {summaries && (
           <Link className="add-card" to="/plants/new">

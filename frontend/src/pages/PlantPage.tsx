@@ -29,7 +29,7 @@ export function PlantPage() {
   const [version, setVersion] = useState(0);
   const [repotOpen, setRepotOpen] = useState(false);
   const { data, error } = useAsync(
-    () => Promise.all([api.summary(id), api.weekly(id, WEEKS), api.fertilizers()]),
+    () => Promise.all([api.summary(id), api.weekly(id, WEEKS)]),
     [id, version],
   );
   const refresh = () => setVersion((v) => v + 1);
@@ -44,7 +44,7 @@ export function PlantPage() {
   }
   if (!data) return <header className="page-head"><BackLink /></header>;
 
-  const [s, weeks, fertilizers] = data;
+  const [s, weeks] = data;
   const { plant } = s;
   const meta = [
     plant.species,
@@ -79,7 +79,7 @@ export function PlantPage() {
 
         <PlantStats s={s} detailed />
         <div style={{ marginTop: 12 }}><LightHint light={s.light} /></div>
-        <PlantActions s={s} fertilizers={fertilizers} onChanged={refresh} style={{ marginTop: 12 }} />
+        <PlantActions s={s} onChanged={refresh} style={{ marginTop: 12 }} />
         <div className="btn-row" style={{ marginTop: 8 }}>
           <button className="btn btn--sm" type="button" onClick={() => setRepotOpen(true)}>
             <Icon name="repot" />Записать пересадку

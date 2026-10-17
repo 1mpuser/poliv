@@ -28,7 +28,7 @@ func New(pool *pgxpool.Pool, zone *time.Location, lamps *lamps.Service) *Service
 
 func (s *Service) GetPlant(ctx context.Context, id int) (*models.Plant, error) {
 	row := s.Pool.QueryRow(ctx, `SELECT id, user_id, name, species, location, pot_size_l, added_at, notes,
-		water_interval_days, fertilizing_enabled, light_target_hours, repot_check_interval_months
+		water_interval_days, fertilizing_enabled, fertilizing_interval_days, light_target_hours, repot_check_interval_months
 		FROM plants WHERE id=$1`, id)
 	return scanPlant(row)
 }
@@ -36,7 +36,7 @@ func (s *Service) GetPlant(ctx context.Context, id int) (*models.Plant, error) {
 func scanPlant(row pgx.Row) (*models.Plant, error) {
 	var p models.Plant
 	err := row.Scan(&p.ID, &p.UserID, &p.Name, &p.Species, &p.Location, &p.PotSizeL, &p.AddedAt, &p.Notes,
-		&p.WaterIntervalDays, &p.FertilizingEnabled, &p.LightTargetHours, &p.RepotCheckIntervalMonths)
+		&p.WaterIntervalDays, &p.FertilizingEnabled, &p.FertilizingIntervalDays, &p.LightTargetHours, &p.RepotCheckIntervalMonths)
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +45,7 @@ func scanPlant(row pgx.Row) (*models.Plant, error) {
 
 func (s *Service) PlantsByUser(ctx context.Context, userID int) ([]models.Plant, error) {
 	rows, err := s.Pool.Query(ctx, `SELECT id, user_id, name, species, location, pot_size_l, added_at, notes,
-		water_interval_days, fertilizing_enabled, light_target_hours, repot_check_interval_months
+		water_interval_days, fertilizing_enabled, fertilizing_interval_days, light_target_hours, repot_check_interval_months
 		FROM plants WHERE user_id=$1 ORDER BY id`, userID)
 	if err != nil {
 		return nil, err
@@ -82,6 +82,66 @@ func (s *Service) FertilizersForUser(ctx context.Context, userID int) ([]models.
 	return out, rows.Err()
 }
 
+// FertilizersForPlant — удобрения, привязанные к растению (его набор).
+func (s *Service) FertilizersForPlant(ctx context.Context, plantID int) ([]models.FertilizerType, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT f.id, f.user_id, f.name, f.npk, f.root_dose_ml_per_l, f.foliar_dose_ml_per_l,
+		f.interval_days_active_season, f.interval_days_dormant_season
+		FROM plant_fertilizers pf JOIN fertilizer_types f ON f.id=pf.fertilizer_type_id
+		WHERE pf.plant_id=$1 ORDER BY f.id`, plantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.FertilizerType
+	for rows.Next() {
+		var f models.FertilizerType
+		if err := rows.Scan(&f.ID, &f.UserID, &f.Name, &f.NPK, &f.RootDoseMlPerL, &f.FoliarDoseMlPerL,
+			&f.IntervalDaysActiveSeason, &f.IntervalDaysDormantSeason); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// FertilizerIDsForPlant — id удобрений, привязанных к одному растению.
+func (s *Service) FertilizerIDsForPlant(ctx context.Context, plantID int) ([]int, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT fertilizer_type_id FROM plant_fertilizers
+		WHERE plant_id=$1 ORDER BY fertilizer_type_id`, plantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []int
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// FertilizerIDsByUser — id удобрений по каждому растению учётки (для списка растений, один запрос).
+func (s *Service) FertilizerIDsByUser(ctx context.Context, userID int) (map[int][]int, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT pf.plant_id, pf.fertilizer_type_id FROM plant_fertilizers pf
+		JOIN plants p ON p.id=pf.plant_id WHERE p.user_id=$1 ORDER BY pf.plant_id, pf.fertilizer_type_id`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int][]int{}
+	for rows.Next() {
+		var plantID, fertID int
+		if err := rows.Scan(&plantID, &fertID); err != nil {
+			return nil, err
+		}
+		out[plantID] = append(out[plantID], fertID)
+	}
+	return out, rows.Err()
+}
+
 func toSummaryFerts(fts []models.FertilizerType) []summary.Fertilizer {
 	out := make([]summary.Fertilizer, len(fts))
 	for i, f := range fts {
@@ -105,16 +165,12 @@ func (s *Service) BuildSummary(ctx context.Context, plantID, userID int) (*schem
 	if err != nil {
 		return nil, err
 	}
-	ferts, err := s.FertilizersForUser(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
 	now := time.Now().UTC()
 	daylight, err := todayDaylight(ctx, s.Pool, userID, s.Zone)
 	if err != nil {
 		return nil, err
 	}
-	return s.buildSummary(ctx, plant, settings, toSummaryFerts(ferts), now, daylight)
+	return s.buildSummary(ctx, plant, settings, now, daylight)
 }
 
 func todayDaylight(ctx context.Context, pool *pgxpool.Pool, userID int, zone *time.Location) (*models.DaylightDay, error) {
@@ -133,9 +189,15 @@ func todayDaylight(ctx context.Context, pool *pgxpool.Pool, userID int, zone *ti
 }
 
 func (s *Service) buildSummary(ctx context.Context, plant *models.Plant, settings *models.UserSettings,
-	ferts []summary.Fertilizer, now time.Time, daylight *models.DaylightDay) (*schema.PlantSummary, error) {
+	now time.Time, daylight *models.DaylightDay) (*schema.PlantSummary, error) {
 	zone := s.Zone
 	ahead := settings.NotifyDaysAhead
+
+	plantFertTypes, err := s.FertilizersForPlant(ctx, plant.ID)
+	if err != nil {
+		return nil, err
+	}
+	ferts := toSummaryFerts(plantFertTypes)
 
 	var lastWater, lastCheck *time.Time
 	if err := s.Pool.QueryRow(ctx, `SELECT max(watered_at) FROM watering_logs WHERE plant_id=$1`, plant.ID).Scan(&lastWater); err != nil {
@@ -152,7 +214,7 @@ func (s *Service) buildSummary(ctx context.Context, plant *models.Plant, setting
 		return nil, err
 	}
 	feed := summary.FeedStateOf(plant.FertilizingEnabled, ferts, feedPtr(lastFed.FedAt), lastFed.FertilizerTypeID,
-		settings.CurrentSeason, ahead, now, zone)
+		settings.CurrentSeason, ahead, now, zone, plant.FertilizingIntervalDays)
 
 	midnight := summary.LocalMidnight(summary.LocalDate(now, zone), zone)
 	ps, err := s.Lamps.PlantSessions(ctx, s.Pool, plant.ID, &midnight)
@@ -216,6 +278,7 @@ func (s *Service) buildSummary(ctx context.Context, plant *models.Plant, setting
 			IntervalDays: plant.WaterIntervalDays, DueInDays: water.DueInDays, Status: water.Status,
 		},
 		Feed: feedOut,
+		Fertilizers: fertsToSchema(ferts),
 		Lamp: schema.LampSummary{
 			HoursToday: render.F(hours), PlannedHours: render.F(plant.LightTargetHours),
 			Status: summary.LampStatus(hours, plant.LightTargetHours), IsOn: current != nil, OpenSessionID: openID,
@@ -350,6 +413,7 @@ func plantToOut(p *models.Plant, zone *time.Location) *schema.PlantOut {
 			Name: p.Name, Species: p.Species, Location: p.Location,
 			PotSizeL: render.MarshalF(p.PotSizeL), Notes: p.Notes,
 			WaterIntervalDays: p.WaterIntervalDays, FertilizingEnabled: p.FertilizingEnabled,
+			FertilizingIntervalDays: p.FertilizingIntervalDays,
 			LightTargetHours: render.F(p.LightTargetHours), RepotCheckMonths: p.RepotCheckIntervalMonths,
 		},
 		ID: p.ID, AddedAt: render.Time(p.AddedAt, zone),
@@ -369,6 +433,18 @@ func feedSummary(plant *models.Plant, lastFed models.FeedingLog, lastFertName *s
 	if feed.DueDate != nil {
 		v := render.Date(*feed.DueDate)
 		out.DueDate = &v
+	}
+	return out
+}
+
+func fertsToSchema(ferts []summary.Fertilizer) []schema.Fertilizer {
+	out := make([]schema.Fertilizer, 0, len(ferts))
+	for _, f := range ferts {
+		out = append(out, schema.Fertilizer{
+			ID: f.ID, Name: f.Name, NPK: f.NPK,
+			RootDoseMlPerL: render.MarshalF(f.RootDoseMlPerL), FoliarDoseMlPerL: render.MarshalF(f.FoliarDoseMlPerL),
+			IntervalDaysActive: f.IntervalDaysActiveSeason, IntervalDaysDormant: f.IntervalDaysDormantSeason,
+		})
 	}
 	return out
 }
@@ -638,10 +714,10 @@ func ScanPlant(row pgx.Row) (*models.Plant, error) {
 	return scanPlant(row)
 }
 
-// BuildOne — сводка одного растения с готовыми настройками/удобрениями/светом.
+// BuildOne — сводка одного растения с готовыми настройками/светом.
 func (s *Service) BuildOne(ctx context.Context, plant *models.Plant, settings *models.UserSettings,
-	ferts []summary.Fertilizer, now time.Time, daylight *models.DaylightDay) (*schema.PlantSummary, error) {
-	return s.buildSummary(ctx, plant, settings, ferts, now, daylight)
+	now time.Time, daylight *models.DaylightDay) (*schema.PlantSummary, error) {
+	return s.buildSummary(ctx, plant, settings, now, daylight)
 }
 
 // CurrentDaylight — свет сегодня в городе учётки.

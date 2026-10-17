@@ -603,3 +603,13 @@ body:has(.login) { padding-bottom: 0; }
   color: var(--late);
 }
 .action.action--warn .i { color: var(--late); }
+
+/* ---------- Подкормка: набор удобрений растения в форме ---------- */
+.fert-checks { display: grid; gap: 2px; }
+.fert-checks .check {
+  display: flex; align-items: center; gap: 10px;
+  min-height: 44px; font-size: 15px; color: var(--ink);
+}
+.fert-checks .check input { flex: none; }
+.fert-checks .check__name { overflow-wrap: anywhere; }
+.fert-checks .field__hint { display: block; }

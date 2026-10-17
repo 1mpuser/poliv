@@ -1,6 +1,6 @@
 import { Link } from 'react-router';
 import { fmtDate, thumbClass } from '../format';
-import type { Fertilizer, PlantSummary } from '../types';
+import type { PlantSummary } from '../types';
 import { Icon, Thumb } from './icons';
 import { LightHint } from './LightHint';
 import { PlantActions } from './PlantActions';
@@ -8,11 +8,9 @@ import { PlantStats } from './PlantStats';
 
 export function PlantCard({
   s,
-  fertilizers,
   onChanged,
 }: {
   s: PlantSummary;
-  fertilizers: Fertilizer[];
   onChanged: () => void;
 }) {
   const { plant, repot } = s;
@@ -42,7 +40,7 @@ export function PlantCard({
         </span>
       </p>
 
-      <PlantActions s={s} fertilizers={fertilizers} onChanged={onChanged} />
+      <PlantActions s={s} onChanged={onChanged} />
     </article>
   );
 }
